@@ -16,6 +16,15 @@
 - **Safety first**: Prompts for confirmation when apps already exist
 - **Automatic updates**: Built-in Sparkle integration for seamless updates
 
+## Screenshots
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/f5322123-caed-4677-993e-fec5a83cd6a8" alt="EasyDMG Progress Bar" width="500">
+</p>
+<p align="center">
+<img width="331" height="300" alt="SCR-20260119-cqjv" src="https://github.com/user-attachments/assets/6e6b094e-5a3e-403a-89a8-1965cef1ccfb" />
+</p>
+
 ## Installation
 
 Download the latest release from the [Releases](https://github.com/jefe-johann/EasyDMG/releases) page and drag to Applications.
