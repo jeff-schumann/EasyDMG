@@ -210,6 +210,13 @@ class DMGProcessor: ObservableObject {
             return
         }
 
+        // Password-protected DMGs can't be mounted non-interactively
+        if mountPoint == "PASSWORD_PROTECTED" {
+            showProgress("DMG is password-protected, opening for manual install...", progress: 0.0)
+            await openForManualInstallation(dmgPath: url.path, reason: "DMG is password-protected")
+            return
+        }
+
         // Find .app files in the mounted DMG (Step 2 starts: 20%)
         showProgress("Scanning for apps...", progress: 0.2)
         let appFiles = findAppFiles(in: mountPoint)
@@ -295,7 +302,12 @@ class DMGProcessor: ObservableObject {
                 task.waitUntilExit()
 
                 guard task.terminationStatus == 0 else {
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errorOutput = String(data: errorData, encoding: .utf8)?.lowercased() ?? ""
                     print("Mount failed with status \(task.terminationStatus)")
+                    if errorOutput.contains("authentication") || errorOutput.contains("passphrase") || errorOutput.contains("encrypted") {
+                        return "PASSWORD_PROTECTED"
+                    }
                     return nil
                 }
 
