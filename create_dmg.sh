@@ -6,12 +6,12 @@
 set -e
 
 # Configuration
-APP_NAME="EasyDMG"
-VERSION="1.0.4"
-BUILD_DIR="$HOME/Library/Developer/Xcode/DerivedData/EasyDMG-dibggcaewvrasrcrtvhemiwxucou/Build/Products/Release"
-DMG_NAME="${APP_NAME}_v${VERSION}"
-TEMP_DIR="/tmp/${APP_NAME}_dmg"
-OUTPUT_DMG="./${DMG_NAME}.dmg"
+APP_NAME="${APP_NAME:-EasyDMG}"
+VERSION="${VERSION:-1.0.4}"
+BUILD_DIR="${BUILD_DIR:-$HOME/Library/Developer/Xcode/DerivedData/EasyDMG-dibggcaewvrasrcrtvhemiwxucou/Build/Products/Release}"
+DMG_NAME="${DMG_NAME:-${APP_NAME}_v${VERSION}}"
+TEMP_DIR="${TEMP_DIR:-/tmp/${APP_NAME}_dmg}"
+OUTPUT_DMG="${OUTPUT_DMG:-./${DMG_NAME}.dmg}"
 
 echo "📦 Creating DMG for ${APP_NAME} ${VERSION}..."
 

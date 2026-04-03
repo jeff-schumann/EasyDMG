@@ -3,6 +3,14 @@
     <channel>
         <title>EasyDMG</title>
         <item>
+            <title>1.0.4</title>
+            <pubDate>Fri, 03 Apr 2026 15:34:34 -0400</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.0.4/EasyDMG_v1.0.4.dmg" length="3040945" type="application/octet-stream" sparkle:edSignature="A8MVD4m1at6a6j7TcIpbuNBFKt/vLOAC+mhyDkCw0voqRpOdewPbu3I83pecf/hZLzSIyYSFnQLBg302BaRdCw=="/>
+        </item>
+        <item>
             <title>1.0.3</title>
             <pubDate>Wed, 29 Jan 2026 14:05:00 -0500</pubDate>
             <sparkle:version>4</sparkle:version>

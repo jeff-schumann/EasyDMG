@@ -114,5 +114,6 @@ Docs/
 # Sensitive build configuration
 exportOptions.plist
 AGENTS.md
+release_guide.md
 
 gemini.md
