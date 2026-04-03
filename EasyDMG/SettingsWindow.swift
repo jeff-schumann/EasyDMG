@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import CoreServices
 import Sparkle
 
 struct SettingsView: View {
@@ -68,6 +69,8 @@ struct SettingsView: View {
 // MARK: - Setup Tab
 
 struct SetupTabView: View {
+    @State private var isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -82,7 +85,34 @@ struct SetupTabView: View {
                 Text("Set as Default for DMG Files")
                     .font(.headline)
 
-                Text("To make EasyDMG your default app for installing DMG files:")
+                if isDefault {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 18))
+                        Text("EasyDMG is your default app for DMG files.")
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    Text("Make EasyDMG automatically handle DMG files when you double-click them.")
+                        .foregroundColor(.secondary)
+
+                    Button(action: {
+                        DefaultHandlerHelper.setAsDefaultDMGHandler()
+                        isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
+                    }) {
+                        Label("Set as Default for DMG Files", systemImage: "checkmark.circle")
+                    }
+                    .controlSize(.large)
+                }
+
+                Divider()
+
+                Text("Manual Setup")
+                    .font(.headline)
+
+                Text("You can also set the default via Finder:")
                     .foregroundColor(.secondary)
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -105,16 +135,42 @@ struct SetupTabView: View {
                     Spacer()
                 }
                 .padding(.top, 8)
-
-                Text("Once set, double-clicking any DMG file will be handled by EasyDMG!")
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 12)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
+            .padding([.horizontal, .bottom])
+            .padding(.top, 8)
+        }
+        .onAppear {
+            isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
+        }
+    }
+}
+
+// MARK: - Default Handler Helper
+
+enum DefaultHandlerHelper {
+    private static let dmgUTIs: [CFString] = [
+        "com.apple.disk-image-udif" as CFString,
+        "public.disk-image" as CFString
+    ]
+
+    static func isDefaultDMGHandler() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        for uti in dmgUTIs {
+            guard let handler = LSCopyDefaultRoleHandlerForContentType(uti, .viewer)?.takeRetainedValue() as String? else {
+                return false
+            }
+            if handler.caseInsensitiveCompare(bundleID) != .orderedSame {
+                return false
+            }
+        }
+        return true
+    }
+
+    static func setAsDefaultDMGHandler() {
+        guard let bundleID = Bundle.main.bundleIdentifier as CFString? else { return }
+        for uti in dmgUTIs {
+            LSSetDefaultRoleHandlerForContentType(uti, .viewer, bundleID)
         }
     }
 }
@@ -156,9 +212,6 @@ struct AboutTabView: View {
                 Text("If a DMG contains something unusual, like a license agreement, a .pkg installer, or a non-standard setup, EasyDMG won't guess. It simply opens the image and lets you take it from there, so you always stay in control.")
                     .font(.system(size: 14))
 
-                Spacer()
-                    .frame(height: 20)
-
                 HStack(spacing: 16) {
                     Button(action: {
                         NSWorkspace.shared.open(URL(string: "https://github.com/jefe-johann/EasyDMG")!)
@@ -174,7 +227,8 @@ struct AboutTabView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
+            .padding([.horizontal, .bottom])
+            .padding(.top, 8)
         }
     }
 }
@@ -223,7 +277,8 @@ struct SettingsTabView: View {
                     .padding(.leading, 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
+            .padding([.horizontal, .bottom])
+            .padding(.top, 8)
         }
     }
 }
