@@ -417,16 +417,19 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private func trashDMGIfNeeded(at dmgPath: String, shouldTrash: Bool) {
+    @discardableResult
+    private func trashDMGIfNeeded(at dmgPath: String, shouldTrash: Bool) -> Bool {
         guard shouldTrash else {
-            return
+            return false
         }
 
         let dmgURL = URL(fileURLWithPath: dmgPath)
         do {
             try FileManager.default.trashItem(at: dmgURL, resultingItemURL: nil)
+            return true
         } catch {
             print("Warning: Failed to move DMG to trash: \(error)")
+            return false
         }
     }
 
@@ -474,11 +477,19 @@ class DMGProcessor: ObservableObject {
             if !shouldReplace {
                 // User chose to skip
                 print("Installation cancelled by user")
-                await unmountAndCleanup(
+                let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
                     shouldTrashDMG: UserPreferences.shared.autoTrashDMG
                 )
+
+                if currentFeedbackMode == .notification && didTrashDMG {
+                    await sendNotification(
+                        title: "EasyDMG",
+                        message: "\(appName) was skipped; disk image moved to Trash"
+                    )
+                }
+
                 ProgressWindowController.shared.hide()
                 return
             }
@@ -666,7 +677,7 @@ class DMGProcessor: ObservableObject {
     }
 
     // Unmount and cleanup (optionally move DMG to trash)
-    private func unmountAndCleanup(mountPoint: String, dmgPath: String, shouldTrashDMG: Bool) async {
+    private func unmountAndCleanup(mountPoint: String, dmgPath: String, shouldTrashDMG: Bool) async -> Bool {
         await unmountDMG(at: mountPoint)
 
         if shouldTrashDMG {
@@ -675,7 +686,7 @@ class DMGProcessor: ObservableObject {
             showProgress("Keeping disk image...", progress: 0.8)
         }
 
-        trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG)
+        return trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG)
     }
 
     // Remove quarantine attributes from installed app
