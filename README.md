@@ -24,7 +24,7 @@ After setting EasyDMG as your default app for opening DMGs (instructions below -
 
 - **It's EASY!**: Set EasyDMG as your default DMG handler and forget about it. 
 - **It's simple**: After setting as your default, the app only runs when opening a DMG. Doesn't take up space in your dock or menubar, it's gone until you need it
-- **It's fun**: Enjoy the hampster progress bar if enabled 🪄
+- **It's fun**: Enjoy the hamster progress bar if enabled 🪄
 - **It's native**: Built with Swift for MacOS, it's quick and seamless
 - **Flexible settings**: Choose between progress window, notifications, or silent mode
 - **Save disk space**: Optionally moves DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
