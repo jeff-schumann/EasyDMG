@@ -48,15 +48,15 @@ struct SettingsView: View {
                     }
                     .tag(0)
 
-                AboutTabView()
-                    .tabItem {
-                        Label("About", systemImage: "info.circle")
-                    }
-                    .tag(1)
-
                 SettingsTabView(preferences: preferences)
                     .tabItem {
                         Label("Settings", systemImage: "slider.horizontal.3")
+                    }
+                    .tag(1)
+
+                AboutTabView()
+                    .tabItem {
+                        Label("About", systemImage: "info.circle")
                     }
                     .tag(2)
             }
@@ -203,13 +203,13 @@ struct AboutTabView: View {
                 Text("Installing simple Mac apps should be one click!")
                     .font(.system(size: 14))
 
-                Text("If you've been annoyed by having to mount the DMG, drag the app to Applications, eject the disk, and then send the DMG to the trash (or forgetting the last two steps, and having a GB of old DMGs in your downloads folder 🫠) this app is for you.")
+                Text("The standard DMG workflow is clunky and annoying: mount the DMG, drag the app to Applications, go find it in Applications, eject the disk, and then send the DMG to the trash (or forgetting the last two steps, and having a GB of old DMGs in your downloads folder 🫠).")
                     .font(.system(size: 14))
 
-                Text("Skip the clunky routine. EasyDMG handles all of that automatically: mount, install, tidy up, done.")
+                Text("EasyDMG is a simple, tiny utility that handles all of those steps automatically: mount, install, tidy up, done! The app doesn't need to be running - no dock icon, no menu bar icon, it just opens when needed and closes when finished.")
                     .font(.system(size: 14))
 
-                Text("If a DMG contains something unusual, like a license agreement, a .pkg installer, or a non-standard setup, EasyDMG won't guess. It simply opens the image and lets you take it from there, so you always stay in control.")
+                Text("If a DMG contains something unusual, like a license agreement, a .pkg installer, or a non-standard setup, EasyDMG won't guess. It simply opens the image and lets you take it from there.")
                     .font(.system(size: 14))
 
                 HStack(spacing: 16) {
