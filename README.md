@@ -34,7 +34,7 @@ After setting EasyDMG as your default app for opening DMGs (instructions below -
 ## Screenshots
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/f5322123-caed-4677-993e-fec5a83cd6a8" alt="EasyDMG Progress Bar" width="500">
+  <img src="https://github.com/user-attachments/assets/24b72ba2-5d0b-4f14-8dc9-6875c1479c10" alt="EasyDMG Progress Bar" width="500">
 </p>
 <p align="center">
 <img width="331" height="300" alt="SCR-20260119-cqjv" src="https://github.com/user-attachments/assets/6e6b094e-5a3e-403a-89a8-1965cef1ccfb" />
