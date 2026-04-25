@@ -22,11 +22,11 @@ enum SettingsPalette {
             : NSColor(srgbRed: 0x2E / 255, green: 0x43 / 255, blue: 0x62 / 255, alpha: 1)
     })
 
-    // static let heroGradient = LinearGradient(
-    //     colors: [Color(hex: "643E26"), Color(hex: "B8621A")],
-    //     startPoint: .topLeading,
-    //     endPoint: .bottomTrailing
-    // )
+    static let heroGradient = LinearGradient(
+        colors: [Color(hex: "643E26"), Color(hex: "B8621A")],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
     static let heroBackground = Color(hex: "FDF8EC")
 }
 

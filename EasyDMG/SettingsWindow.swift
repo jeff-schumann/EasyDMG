@@ -55,6 +55,8 @@ struct SettingsView: View {
 // MARK: - Hero Header
 
 private struct HeroHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         HStack(spacing: 4) {
             Image("wizardhamster")
@@ -64,17 +66,21 @@ private struct HeroHeader: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("EasyDMG")
                     .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(Color(hex: "231A12"))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "F5E6C8") : Color(hex: "231A12"))
                     .tracking(-0.5)
                 Text("v\(Bundle.main.appVersion)")
                     .font(.system(size: 12))
-                    .foregroundStyle(Color(hex: "7D6A58"))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "D4B896") : Color(hex: "7D6A58"))
             }
             Spacer()
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 16)
-        .background(SettingsPalette.heroBackground)
+        .background(
+            colorScheme == .dark
+                ? AnyView(SettingsPalette.heroGradient)
+                : AnyView(SettingsPalette.heroBackground)
+        )
     }
 }
 
