@@ -44,7 +44,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 550, height: 450)
+        .frame(width: 550, height: 500)
         .background(theme.background)
         .onAppear {
             NSApp.keyWindow?.titleVisibility = .hidden
@@ -92,10 +92,10 @@ struct SetupTabView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 24) {
 
                 // Set as Default section
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Set as Default")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
@@ -126,12 +126,12 @@ struct SetupTabView: View {
                     .frame(height: 1)
 
                 // Manual setup steps
-                VStack(alignment: .leading, spacing: 9) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Manual Setup")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
                         StepBubble(number: 1, text: "Right-click any .dmg file",           textColor: theme.text)
                         StepBubble(number: 2, text: "Select \"Get Info\"",                  textColor: theme.text)
                         StepBubble(number: 3, text: "Under \"Open with:\" choose EasyDMG", textColor: theme.text)
@@ -156,7 +156,7 @@ struct SetupTabView: View {
                     .frame(height: 1)
 
                 // Open With section
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Open with EasyDMG Without Setting as Default")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
@@ -168,8 +168,8 @@ struct SetupTabView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
         }
         .onAppear {
             isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
@@ -263,20 +263,20 @@ struct SettingsTabView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 24) {
                 // Installation Preferences
-                VStack(alignment: .leading, spacing: 11) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Installation Preferences")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
 
                     Toggle("Move DMG to trash after installation", isOn: $preferences.autoTrashDMG)
-                        .toggleStyle(PillToggleStyle(accent: SettingsPalette.navy, inactiveTrack: theme.border))
+                        .toggleStyle(.checkbox)
 
                     Toggle("Reveal app in Finder after installation", isOn: $preferences.revealInFinder)
-                        .toggleStyle(PillToggleStyle(accent: SettingsPalette.navy, inactiveTrack: theme.border))
+                        .toggleStyle(.checkbox)
 
-                    VStack(alignment: .leading, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("Installation feedback:")
                             .font(.system(size: 11.5))
                             .foregroundStyle(theme.muted)
@@ -288,7 +288,7 @@ struct SettingsTabView: View {
                             theme: theme
                         )
                     }
-                    .padding(.top, 2)
+                    .padding(.top, 4)
                 }
 
                 Rectangle()
@@ -296,7 +296,7 @@ struct SettingsTabView: View {
                     .frame(height: 1)
 
                 // Updates
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text("Updates")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
@@ -311,12 +311,12 @@ struct SettingsTabView: View {
                         get: { viewModel.automaticallyChecksForUpdates },
                         set: { viewModel.setAutomaticallyChecks($0) }
                     ))
-                    .toggleStyle(PillToggleStyle(accent: SettingsPalette.navy, inactiveTrack: theme.border))
+                    .toggleStyle(.checkbox)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
         }
     }
 }
