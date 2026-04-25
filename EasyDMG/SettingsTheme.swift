@@ -41,6 +41,7 @@ struct SettingsTheme {
     let successGreen: Color
     let tabBarBackground: Color
     let tabTrack: Color
+    let accentOutline: Color
 
     static func resolve(for colorScheme: ColorScheme) -> SettingsTheme {
         colorScheme == .dark ? .dark : .light
@@ -54,7 +55,8 @@ struct SettingsTheme {
         muted:                 Color(hex: "7D6A58"),
         successGreen:          Color(hex: "2F7D32"),
         tabBarBackground:      Color(hex: "FDF8EC"),
-        tabTrack:              Color(hex: "E8E1D8")
+        tabTrack:              Color(hex: "E8E1D8"),
+        accentOutline:         SettingsPalette.navy
     )
 
     static let dark = SettingsTheme(
@@ -64,8 +66,9 @@ struct SettingsTheme {
         text:                  Color(hex: "EDE8E2"),
         muted:                 Color(hex: "B8AC9E"),
         successGreen:          Color(hex: "B0DA7F"),
-        tabBarBackground:      Color(hex: "272D3A"),
-        tabTrack:              Color(hex: "303848")
+        tabBarBackground:      Color(hex: "191C24"),
+        tabTrack:              Color(hex: "22283A"),
+        accentOutline:         Color(hex: "F1CB9C")
     )
 }
 

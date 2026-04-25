@@ -56,7 +56,7 @@ struct SettingsView: View {
 
 private struct HeroHeader: View {
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 4) {
             Image("wizardhamster")
                 .resizable()
                 .frame(width: 84, height: 84)

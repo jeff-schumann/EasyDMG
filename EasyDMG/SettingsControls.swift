@@ -151,12 +151,12 @@ struct AmberOutlineButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(theme.muted)
+            .foregroundStyle(theme.accentOutline)
             .padding(.vertical, 5)
             .padding(.horizontal, 12)
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(theme.border, lineWidth: 1.5)
+                    .strokeBorder(theme.accentOutline, lineWidth: 1.5)
             )
             .opacity(configuration.isPressed ? 0.8 : 1)
     }
