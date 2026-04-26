@@ -30,8 +30,15 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HeroHeader()
-            SettingsTabBar(selection: $selectedTab, theme: theme)
+            VStack(spacing: 0) {
+                HeroHeader()
+                SettingsTabBar(selection: $selectedTab, theme: theme)
+            }
+            .background(
+                colorScheme == .dark
+                    ? AnyView(SettingsPalette.heroGradient)
+                    : AnyView(Color.clear)
+            )
             Group {
                 switch selectedTab {
                 case .setup:
@@ -58,7 +65,7 @@ private struct HeroHeader: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: colorScheme == .dark ? 14 : 4) {
             Image("wizardhamster")
                 .resizable()
                 .frame(width: 84, height: 84)
@@ -78,7 +85,7 @@ private struct HeroHeader: View {
         .padding(.horizontal, 16)
         .background(
             colorScheme == .dark
-                ? AnyView(SettingsPalette.heroGradient)
+                ? AnyView(Color.clear)
                 : AnyView(SettingsPalette.heroBackground)
         )
     }

@@ -22,11 +22,38 @@ enum SettingsPalette {
             : NSColor(srgbRed: 0x2E / 255, green: 0x43 / 255, blue: 0x62 / 255, alpha: 1)
     })
 
-    static let heroGradient = LinearGradient(
-        colors: [Color(hex: "643E26"), Color(hex: "B8621A")],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
+    // Magic: gold radial glow from bottom-right over deep navy
+    static let heroGradient = RadialGradient(
+        gradient: Gradient(stops: [
+            .init(color: Color(hex: "F1CB9C"), location: 0.0),
+            .init(color: Color(hex: "8C6E47"), location: 0.35),
+            .init(color: Color(hex: "1A2238"), location: 1.0)
+        ]),
+        center: .bottomTrailing,
+        startRadius: 0,
+        endRadius: 340
     )
+
+    // Subtle all-navy gradient: surface → border
+    // static let heroGradient = LinearGradient(
+    //     colors: [Color(hex: "22283A"), Color(hex: "333D52")],
+    //     startPoint: .topLeading,
+    //     endPoint: .bottomTrailing
+    // )
+
+    // Navy → gold gradient (matches dark surface + About-tab GitHub button accent)
+    // static let heroGradient = LinearGradient(
+    //     colors: [Color(hex: "22283A"), Color(hex: "F1CB9C")],
+    //     startPoint: .topLeading,
+    //     endPoint: .bottomTrailing
+    // )
+
+    // Original amber gradient — keep around in case we want to revert
+    // static let heroGradient = LinearGradient(
+    //     colors: [Color(hex: "643E26"), Color(hex: "B8621A")],
+    //     startPoint: .topLeading,
+    //     endPoint: .bottomTrailing
+    // )
     static let heroBackground = Color(hex: "FDF8EC")
 }
 
@@ -66,7 +93,7 @@ struct SettingsTheme {
         text:                  Color(hex: "EDE8E2"),
         muted:                 Color(hex: "B8AC9E"),
         successGreen:          Color(hex: "B0DA7F"),
-        tabBarBackground:      Color(hex: "191C24"),
+        tabBarBackground:      Color.clear,
         tabTrack:              Color(hex: "22283A"),
         accentOutline:         Color(hex: "F1CB9C")
     )
