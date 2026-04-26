@@ -26,7 +26,7 @@ class DMGProcessor: ObservableObject {
     ]
 
     private func showProgress(_ message: String, progress: Double) {
-        print("📝 \(message) (\(Int(progress * 100))%)")
+        DiagnosticLogger.shared.log("📝 \(message) (\(Int(progress * 100))%)")
 
         // Only show progress window if feedback mode is progress bar
         if currentFeedbackMode == .progressBar {
@@ -54,7 +54,7 @@ class DMGProcessor: ObservableObject {
                 try await Task.sleep(nanoseconds: delayNanos)
                 if !Task.isCancelled && currentFeedbackMode == .progressBar {
                     ProgressWindowController.shared.update(message: magicMsg, progress: progress)
-                    print("📝 \(magicMsg) (\(Int(progress * 100))%)")
+                    DiagnosticLogger.shared.log("📝 \(magicMsg) (\(Int(progress * 100))%)")
                 }
             }
         }
@@ -89,7 +89,7 @@ class DMGProcessor: ObservableObject {
                 try? await Task.sleep(nanoseconds: delayNanos)
                 if !Task.isCancelled && currentFeedbackMode == .progressBar {
                     ProgressWindowController.shared.update(message: magicMsg, progress: progress)
-                    print("📝 \(magicMsg) (\(Int(progress * 100))%)")
+                    DiagnosticLogger.shared.log("📝 \(magicMsg) (\(Int(progress * 100))%)")
                 }
             }
         }
@@ -113,7 +113,7 @@ class DMGProcessor: ObservableObject {
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            print("❌ Notification error: \(error)")
+            DiagnosticLogger.shared.log("❌ Notification error: \(error)")
         }
     }
 
@@ -141,13 +141,24 @@ class DMGProcessor: ObservableObject {
         return userMode
     }
 
-    func enqueueDMGs(_ urls: [URL]) async {
+    func enqueueDMGs(_ urls: [URL]) {
         guard !urls.isEmpty else {
+            DiagnosticLogger.shared.log("enqueueDMGs called with no DMG URLs")
             return
         }
 
+        DiagnosticLogger.shared.log("enqueueDMGs adding \(urls.count) URL(s); pending before add=\(pendingDMGURLs.count)")
         pendingDMGURLs.append(contentsOf: urls)
-        await drainQueueIfNeeded()
+
+        guard !isDrainingQueue else {
+            DiagnosticLogger.shared.log("DMG queue already active; appended URL(s) for existing drain")
+            return
+        }
+
+        isProcessing = true
+        Task { @MainActor in
+            await drainQueueIfNeeded()
+        }
     }
 
     private func drainQueueIfNeeded() async {
@@ -157,9 +168,11 @@ class DMGProcessor: ObservableObject {
 
         isDrainingQueue = true
         isProcessing = true
+        DiagnosticLogger.shared.log("DMG queue started with \(pendingDMGURLs.count) pending URL(s)")
 
         while !pendingDMGURLs.isEmpty {
             let nextURL = pendingDMGURLs.removeFirst()
+            DiagnosticLogger.shared.log("Processing next DMG: \(nextURL.path); remaining after dequeue=\(pendingDMGURLs.count)")
             await processNextDMG(at: nextURL)
         }
 
@@ -167,22 +180,24 @@ class DMGProcessor: ObservableObject {
         isDrainingQueue = false
         ProgressWindowController.shared.hide()
 
-        print("✅ Processing queue complete, quitting app")
+        DiagnosticLogger.shared.log("✅ Processing queue complete, quitting app")
         NSApp.terminate(nil)
     }
 
     // Process a DMG file (main entry point)
     func processDMG(at url: URL) async {
-        await enqueueDMGs([url])
+        enqueueDMGs([url])
     }
 
     private func processNextDMG(at url: URL) async {
+        DiagnosticLogger.shared.log("processNextDMG started path=\(url.path)")
 
         // Request notification permissions early (before checking effective mode)
         await requestNotificationPermissionsIfNeeded()
 
         // Determine effective feedback mode (with fallback for denied notifications)
         currentFeedbackMode = await effectiveFeedbackMode()
+        DiagnosticLogger.shared.log("Effective feedback mode: \(currentFeedbackMode.rawValue)")
 
         // Show progress window only in progress bar mode
         if currentFeedbackMode == .progressBar {
@@ -193,6 +208,7 @@ class DMGProcessor: ObservableObject {
 
         // Validate the DMG file exists
         guard FileManager.default.fileExists(atPath: url.path) else {
+            DiagnosticLogger.shared.log("DMG file missing before processing: \(url.path)")
             await handleError("File not found: \(url.lastPathComponent)")
             return
         }
@@ -236,20 +252,23 @@ class DMGProcessor: ObservableObject {
         // Handle different scenarios
         switch finalAppFiles.count {
         case 0:
-            print("No .app files found")
-            await openForManualInstallation(mountPoint: mountPoint)
+            DiagnosticLogger.shared.log("Manual fallback: no .app files found at \(mountPoint)")
+            await openForManualInstallation(mountPoint: mountPoint, reason: "No .app files found")
             return
 
         case 1:
             // Single app found - proceed with installation
             let appPath = finalAppFiles[0]
-            print("Installing: \((appPath as NSString).lastPathComponent)")
+            DiagnosticLogger.shared.log("Installing: \((appPath as NSString).lastPathComponent) from \(appPath)")
             await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path)
 
         default:
-            print("Multiple .app files found (\(finalAppFiles.count))")
-            print("Apps found: \(finalAppFiles.map { ($0 as NSString).lastPathComponent })")
-            await openForManualInstallation(mountPoint: mountPoint)
+            let appNames = finalAppFiles.map { ($0 as NSString).lastPathComponent }
+            DiagnosticLogger.shared.log("Manual fallback: multiple .app files found (\(finalAppFiles.count)): \(appNames)")
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                reason: "Multiple .app files found: \(appNames.joined(separator: ", "))"
+            )
             return
         }
 
@@ -275,19 +294,20 @@ class DMGProcessor: ObservableObject {
             // Check for license agreement in output
             return output.contains("Software License Agreement") && output.contains("true")
         } catch {
-            print("Error checking for license: \(error)")
+            DiagnosticLogger.shared.log("Error checking for license: \(error)")
             return false
         }
     }
 
     // Mount a DMG file and return the mount point
     private func mountDMG(at path: String, progress: Double) async -> String? {
-        print("Mounting \(path)...")
+        DiagnosticLogger.shared.log("Mounting \(path)...")
 
         return await withMagicFallback(
             message: "Mounting disk image...",
             progress: progress
         ) {
+            DiagnosticLogger.shared.log("Running hdiutil attach for \(path)")
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
             task.arguments = ["attach", path, "-nobrowse", "-readonly", "-noautoopen"]
@@ -303,9 +323,16 @@ class DMGProcessor: ObservableObject {
 
                 guard task.terminationStatus == 0 else {
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorOutput = String(data: errorData, encoding: .utf8)?.lowercased() ?? ""
-                    print("Mount failed with status \(task.terminationStatus)")
+                    let rawErrorOutput = String(data: errorData, encoding: .utf8) ?? ""
+                    let errorOutput = rawErrorOutput.lowercased()
+                    DiagnosticLogger.shared.log("Mount failed with status \(task.terminationStatus)")
+                    if !rawErrorOutput.isEmpty {
+                        DiagnosticLogger.shared.log(
+                            "hdiutil attach stderr: \(DiagnosticLogger.compact(rawErrorOutput))"
+                        )
+                    }
                     if errorOutput.contains("authentication") || errorOutput.contains("passphrase") || errorOutput.contains("encrypted") {
+                        DiagnosticLogger.shared.log("Manual fallback classification: password protected or encrypted DMG")
                         return "PASSWORD_PROTECTED"
                     }
                     return nil
@@ -313,12 +340,16 @@ class DMGProcessor: ObservableObject {
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
+                DiagnosticLogger.shared.log("hdiutil attach succeeded")
+                if !output.isEmpty {
+                    DiagnosticLogger.shared.log("hdiutil attach stdout: \(DiagnosticLogger.compact(output))")
+                }
 
                 // Check for error/warning keywords
                 if output.lowercased().contains("error") ||
                    output.lowercased().contains("failed") ||
                    output.lowercased().contains("invalid") {
-                    print("Unexpected mount output detected")
+                    DiagnosticLogger.shared.log("Unexpected mount output detected")
                     return nil
                 }
 
@@ -329,17 +360,20 @@ class DMGProcessor: ObservableObject {
                         let mountPoint = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespaces)
                         // Clean up mount point (remove any trailing content after the path)
                         if let endIndex = mountPoint.firstIndex(where: { $0.isNewline || $0 == "\t" }) {
-                            return String(mountPoint[..<endIndex])
+                            let parsedMountPoint = String(mountPoint[..<endIndex])
+                            DiagnosticLogger.shared.log("Parsed mount point: \(parsedMountPoint)")
+                            return parsedMountPoint
                         }
+                        DiagnosticLogger.shared.log("Parsed mount point: \(mountPoint)")
                         return mountPoint
                     }
                 }
 
-                print("Failed to determine mount point from output")
+                DiagnosticLogger.shared.log("Failed to determine mount point from output")
                 return nil
 
             } catch {
-                print("Error mounting DMG: \(error)")
+                DiagnosticLogger.shared.log("Error mounting DMG: \(error)")
                 return nil
             }
         }
@@ -413,7 +447,7 @@ class DMGProcessor: ObservableObject {
         do {
             try FileManager.default.removeItem(at: url)
         } catch {
-            print("Warning: Failed to clean up staged app: \(error)")
+            DiagnosticLogger.shared.log("Warning: Failed to clean up staged app: \(error)")
         }
     }
 
@@ -426,9 +460,10 @@ class DMGProcessor: ObservableObject {
         let dmgURL = URL(fileURLWithPath: dmgPath)
         do {
             try FileManager.default.trashItem(at: dmgURL, resultingItemURL: nil)
+            DiagnosticLogger.shared.log("Moved DMG to Trash: \(dmgPath)")
             return true
         } catch {
-            print("Warning: Failed to move DMG to trash: \(error)")
+            DiagnosticLogger.shared.log("Warning: Failed to move DMG to trash: \(error)")
             return false
         }
     }
@@ -440,6 +475,7 @@ class DMGProcessor: ObservableObject {
 
         do {
             let contents = try fileManager.contentsOfDirectory(atPath: mountPoint)
+            DiagnosticLogger.shared.log("Mount point contents: \(contents)")
             for item in contents {
                 if item.hasSuffix(".app") && !item.hasPrefix(".") {
                     let fullPath = (mountPoint as NSString).appendingPathComponent(item)
@@ -447,10 +483,10 @@ class DMGProcessor: ObservableObject {
                 }
             }
         } catch {
-            print("Error scanning mount point: \(error)")
+            DiagnosticLogger.shared.log("Error scanning mount point: \(error)")
         }
 
-        print("Found \(appFiles.count) .app file(s)")
+        DiagnosticLogger.shared.log("Found \(appFiles.count) .app file(s): \(appFiles)")
         return appFiles
     }
 
@@ -464,6 +500,7 @@ class DMGProcessor: ObservableObject {
 
         // Validate /Applications folder first
         if let errorMessage = validateApplicationsFolder() {
+            DiagnosticLogger.shared.log("Applications folder validation failed: \(errorMessage)")
             await handleError(errorMessage)
             await unmountDMG(at: mountPoint)
             return
@@ -471,12 +508,13 @@ class DMGProcessor: ObservableObject {
 
         // Check if app already exists
         if FileManager.default.fileExists(atPath: destinationPath) {
+            DiagnosticLogger.shared.log("Destination app already exists: \(destinationPath)")
             // Show Skip/Replace dialog
             let shouldReplace = await showSkipReplaceDialog(appName: appName)
 
             if !shouldReplace {
                 // User chose to skip
-                print("Installation cancelled by user")
+                DiagnosticLogger.shared.log("Installation skipped by user")
                 let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
@@ -495,6 +533,7 @@ class DMGProcessor: ObservableObject {
             }
 
             shouldReplaceExistingApp = true
+            DiagnosticLogger.shared.log("User chose to replace existing app")
 
             // User chose to replace - show progress if in progress bar mode
             if currentFeedbackMode == .progressBar {
@@ -505,8 +544,10 @@ class DMGProcessor: ObservableObject {
         // Check disk space before copying
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
+        DiagnosticLogger.shared.log("Calculated app size: \(appSize) bytes for \(appPath)")
         if !hasEnoughDiskSpace(requiredBytes: appSize) {
             let sizeInGB = Double(appSize) / (1024 * 1024 * 1024)
+            DiagnosticLogger.shared.log("Insufficient disk space for app size \(appSize)")
             await handleError("Insufficient disk space (need \(String(format: "%.1f", sizeInGB))GB)")
             await unmountDMG(at: mountPoint)
             return
@@ -520,6 +561,7 @@ class DMGProcessor: ObservableObject {
                 message: "Installing to Applications...",
                 progress: 0.2
             ) {
+                DiagnosticLogger.shared.log("Copying app from \(appPath) to staging path \(stagedURL.path)")
                 try FileManager.default.copyItem(atPath: appPath, toPath: stagedURL.path)
             }
 
@@ -538,12 +580,15 @@ class DMGProcessor: ObservableObject {
             } else {
                 try FileManager.default.moveItem(at: stagedURL, to: destinationURL)
             }
+            let destinationExists = FileManager.default.fileExists(atPath: destinationPath)
+            DiagnosticLogger.shared.log("Installed app at destination: \(destinationPath); existsAfterMove=\(destinationExists)")
 
             // Send notification if in notification mode
             if currentFeedbackMode == .notification {
                 await sendNotification(title: "EasyDMG", message: "\(appName) installed successfully")
             }
         } catch {
+            DiagnosticLogger.shared.log("Installation failed while copying/replacing: \(error)")
             cleanupStagedAppIfNeeded(at: stagedURL)
             await handleError("Installation failed")
             await unmountDMG(at: mountPoint, progress: 0.6)
@@ -578,7 +623,7 @@ class DMGProcessor: ObservableObject {
 
         // Hide the progress window (only visible in progress bar mode)
         ProgressWindowController.shared.hide()
-        print("✅ Processing complete for \(appName)")
+        DiagnosticLogger.shared.log("✅ Processing complete for \(appName)")
     }
 
     // Show Skip/Replace dialog
@@ -607,7 +652,7 @@ class DMGProcessor: ObservableObject {
 
     // Unmount DMG
     private func unmountDMG(at mountPoint: String, progress: Double? = nil) async {
-        print("Unmounting \(mountPoint)...")
+        DiagnosticLogger.shared.log("Unmounting \(mountPoint)...")
 
         // If progress is provided, use magic fallback wrapper
         if let progress = progress {
@@ -637,18 +682,20 @@ class DMGProcessor: ObservableObject {
             task.waitUntilExit()
 
             if task.terminationStatus == 0 {
-                print("✓ Clean detach succeeded")
+                DiagnosticLogger.shared.log("✓ Clean detach succeeded")
                 return
             }
 
             // Read error output
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-            print("Detach failed: \(errorOutput.trimmingCharacters(in: .whitespacesAndNewlines))")
+            DiagnosticLogger.shared.log(
+                "Detach failed: \(DiagnosticLogger.compact(errorOutput))"
+            )
 
             // Check for "resource busy" and retry once
             if errorOutput.lowercased().contains("resource busy") {
-                print("Resource busy, waiting 250ms and retrying...")
+                DiagnosticLogger.shared.log("Resource busy, waiting 250ms and retrying...")
                 Thread.sleep(forTimeInterval: 0.25)
 
                 let retryTask = Process()
@@ -658,21 +705,21 @@ class DMGProcessor: ObservableObject {
                 retryTask.waitUntilExit()
 
                 if retryTask.terminationStatus == 0 {
-                    print("✓ Retry detach succeeded")
+                    DiagnosticLogger.shared.log("✓ Retry detach succeeded")
                     return
                 }
             }
 
             // Force detach as last resort
-            print("Using force detach...")
+            DiagnosticLogger.shared.log("Using force detach...")
             let forceTask = Process()
             forceTask.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
             forceTask.arguments = ["detach", mountPoint, "-force"]
             try? forceTask.run()
             forceTask.waitUntilExit()
-            print("✓ Force detach completed")
+            DiagnosticLogger.shared.log("✓ Force detach completed with status \(forceTask.terminationStatus)")
         } catch {
-            print("Error unmounting DMG: \(error)")
+            DiagnosticLogger.shared.log("Error unmounting DMG: \(error)")
         }
     }
 
@@ -693,7 +740,7 @@ class DMGProcessor: ObservableObject {
     // This prevents apps with auto-update mechanisms from incorrectly detecting
     // "needs update" states that can cause unwanted behavior
     private func removeQuarantineAttributes(from path: String) async {
-        print("Removing quarantine attributes from \(path)...")
+        DiagnosticLogger.shared.log("Removing quarantine attributes from \(path)...")
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
@@ -707,57 +754,62 @@ class DMGProcessor: ObservableObject {
             task.waitUntilExit()
 
             if task.terminationStatus == 0 {
-                print("✓ Quarantine attributes removed")
+                DiagnosticLogger.shared.log("✓ Quarantine attributes removed")
             } else {
                 // Read error but don't fail - this is non-critical
                 let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-                print("Note: Could not remove quarantine attributes: \(errorOutput.trimmingCharacters(in: .whitespacesAndNewlines))")
+                DiagnosticLogger.shared.log(
+                    "Note: Could not remove quarantine attributes: \(DiagnosticLogger.compact(errorOutput))"
+                )
             }
         } catch {
             // Non-fatal error - log and continue
-            print("Note: xattr command failed: \(error)")
+            DiagnosticLogger.shared.log("Note: xattr command failed: \(error)")
         }
     }
 
     // Open for manual installation (mount point)
-    private func openForManualInstallation(mountPoint: String) async {
+    private func openForManualInstallation(mountPoint: String, reason: String) async {
+        DiagnosticLogger.shared.log("Manual fallback opening mount point: \(mountPoint); reason=\(reason)")
         NSWorkspace.shared.open(URL(fileURLWithPath: mountPoint))
         ProgressWindowController.shared.hide()
 
-        print("✅ Opened mounted volume for manual installation")
+        DiagnosticLogger.shared.log("✅ Opened mounted volume for manual installation")
     }
 
     // Open for manual installation (DMG path)
     private func openForManualInstallation(dmgPath: String, reason: String) async {
+        DiagnosticLogger.shared.log("Manual fallback opening DMG path: \(dmgPath); reason=\(reason)")
         let dmgURL = URL(fileURLWithPath: dmgPath)
         let mounterURL = URL(fileURLWithPath: "/System/Library/CoreServices/DiskImageMounter.app")
         let configuration = NSWorkspace.OpenConfiguration()
 
         NSWorkspace.shared.open([dmgURL], withApplicationAt: mounterURL, configuration: configuration) { _, error in
             if let error {
-                print("❌ Failed to open DMG in DiskImageMounter (\(reason)): \(error)")
+                DiagnosticLogger.shared.log("❌ Failed to open DMG in DiskImageMounter (\(reason)): \(error)")
             }
         }
         ProgressWindowController.shared.hide()
 
-        print("✅ Opened DMG in DiskImageMounter for manual installation: \(reason)")
+        DiagnosticLogger.shared.log("✅ Opened DMG in DiskImageMounter for manual installation: \(reason)")
     }
 
     // Reveal app in Finder
     private func revealInFinder(path: String) {
+        DiagnosticLogger.shared.log("Revealing app in Finder: \(path)")
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "/Applications")
     }
 
     // Handle errors
     private func handleError(_ message: String) async {
-        print("Error: \(message)")
+        DiagnosticLogger.shared.log("Error: \(message)")
         showProgress("Error: \(message)", progress: 0.0)
 
         // Keep error visible for 3 seconds
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         ProgressWindowController.shared.hide()
 
-        print("✅ Error handled, continuing queue if needed")
+        DiagnosticLogger.shared.log("✅ Error handled, continuing queue if needed")
     }
 }

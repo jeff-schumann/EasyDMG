@@ -40,6 +40,13 @@
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
       allowLocationSimulation = "YES">
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "EASYDMG_DIAGNOSTIC_LOGGING"
+            value = "1"
+            isEnabled = "NO">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
