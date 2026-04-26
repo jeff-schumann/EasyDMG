@@ -3,6 +3,14 @@
     <channel>
         <title>EasyDMG</title>
         <item>
+            <title>1.1.1</title>
+            <pubDate>TODO</pubDate>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.1.1/EasyDMG_v1.1.1.dmg" length="TODO" type="application/octet-stream" sparkle:edSignature="TODO"/>
+        </item>
+        <item>
             <title>1.1.0</title>
             <pubDate>Fri, 03 Apr 2026 16:12:54 -0400</pubDate>
             <sparkle:version>6</sparkle:version>

@@ -74,14 +74,6 @@ struct SetupTabView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // Quick usage intro
-                Text("Right click any DMG and select 'Open With' to have EasyDMG seamlessly handle app installation and cleanup.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.bottom, 8)
-
-                Divider()
-
                 Text("Set as Default for DMG Files")
                     .font(.headline)
 
@@ -135,6 +127,15 @@ struct SetupTabView: View {
                     Spacer()
                 }
                 .padding(.top, 8)
+
+                Divider()
+
+                Text("Open with EasyDMG Without Setting as Default")
+                    .font(.headline)
+
+                Text("Right click any DMG and select 'Open With' to have EasyDMG seamlessly handle app installation and cleanup.")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding([.horizontal, .bottom])
