@@ -78,20 +78,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationWillFinishLaunching(_ notification: Notification) {
         // This is called before application(_:open:)
         // We use it to detect if files will be opened
+        DiagnosticLogger.shared.startSession()
+        DiagnosticLogger.shared.log("applicationWillFinishLaunching")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DiagnosticLogger.shared.log(
+            "applicationDidFinishLaunching diagnosticLogging=\(DiagnosticLogger.shared.isEnabled)"
+        )
+
         // Set notification delegate to show notifications even when app is active
         UNUserNotificationCenter.current().delegate = self
 
         // Request notification permissions
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error = error {
-                print("❌ Notification authorization error: \(error)")
+                DiagnosticLogger.shared.log("❌ Notification authorization error: \(error)")
             } else if granted {
-                print("✅ Notification authorization granted")
+                DiagnosticLogger.shared.log("✅ Notification authorization granted")
             } else {
-                print("⚠️ Notification authorization denied")
+                DiagnosticLogger.shared.log("⚠️ Notification authorization denied")
             }
         }
 
@@ -102,41 +108,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             if !self.launchedWithFiles {
                 // Launched directly - show settings window with dock icon
-                print("✅ Launched directly - showing settings window")
+                DiagnosticLogger.shared.log("✅ Launched directly - showing settings window")
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
 
                 // Always check for updates when settings window is opened
-                print("✅ Checking for updates (settings window)")
+                DiagnosticLogger.shared.log("✅ Checking for updates (settings window)")
                 self.updater.checkForUpdatesInBackground()
                 self.lastUpdateCheck = Date()
             } else {
                 // Launched with DMG - stay in background
-                print("✅ Launched with DMG - staying in background")
+                DiagnosticLogger.shared.log("✅ Launched with DMG - staying in background")
                 NSApp.setActivationPolicy(.accessory)
                 self.hideSettingsWindow()
 
                 // Only check for updates if 24+ hours have passed
                 if self.shouldCheckForUpdates() {
-                    print("✅ Checking for updates (24+ hours since last check)")
+                    DiagnosticLogger.shared.log("✅ Checking for updates (24+ hours since last check)")
                     self.isWaitingForUpdateCheck = true
                     self.updater.checkForUpdatesInBackground()
                     self.lastUpdateCheck = Date()
 
                     // Give the update check time to complete before allowing quit
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        print("✅ Update check timeout reached, allowing quit")
+                        DiagnosticLogger.shared.log("✅ Update check timeout reached, allowing quit")
                         self.isWaitingForUpdateCheck = false
                     }
                 } else {
-                    print("ℹ️ Skipping update check (checked recently)")
+                    DiagnosticLogger.shared.log("ℹ️ Skipping update check (checked recently)")
                 }
             }
         }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        print("✅ application(_:open:) called with \(urls.count) file(s): \(urls)")
+        DiagnosticLogger.shared.log("✅ application(_:open:) called with \(urls.count) file(s): \(urls)")
         launchedWithFiles = true
 
         // Hide settings window if it's visible (but not progress window)
@@ -146,19 +152,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         NSApp.setActivationPolicy(.accessory)
 
         let dmgURLs = urls.filter { url in
-            print("✅ Checking file: \(url.path)")
+            DiagnosticLogger.shared.log("✅ Checking file: \(url.path)")
             if url.pathExtension.lowercased() == "dmg" {
-                print("✅ Queueing DMG file: \(url.lastPathComponent)")
+                DiagnosticLogger.shared.log("✅ Queueing DMG file: \(url.lastPathComponent)")
                 return true
             } else {
-                print("⚠️ Not a DMG file, ignoring: \(url.path)")
+                DiagnosticLogger.shared.log("⚠️ Not a DMG file, ignoring: \(url.path)")
                 return false
             }
         }
 
-        Task { @MainActor in
-            await dmgProcessor.enqueueDMGs(dmgURLs)
-        }
+        DiagnosticLogger.shared.log("Filtered DMG count: \(dmgURLs.count)")
+
+        dmgProcessor.enqueueDMGs(dmgURLs)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -169,17 +175,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Prevent quit while actively processing
         if dmgProcessor.isProcessing {
-            print("⚠️ Still processing, preventing quit")
+            DiagnosticLogger.shared.log("⚠️ Still processing, preventing quit")
             return .terminateCancel
         }
 
         // Prevent quit while waiting for update check to complete
         if isWaitingForUpdateCheck {
-            print("⚠️ Waiting for update check, preventing quit")
+            DiagnosticLogger.shared.log("⚠️ Waiting for update check, preventing quit")
             return .terminateCancel
         }
 
-        print("✅ Allowing termination")
+        DiagnosticLogger.shared.log("✅ Allowing termination")
         return .terminateNow
     }
 
