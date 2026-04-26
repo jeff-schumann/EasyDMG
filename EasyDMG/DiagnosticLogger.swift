@@ -16,6 +16,7 @@ final class DiagnosticLogger: @unchecked Sendable {
     private let lock = NSLock()
     private let enabled: Bool
     private let logURL: URL?
+    private let timestampFormatter: DateFormatter
 
     nonisolated var isEnabled: Bool {
         enabled
@@ -30,6 +31,7 @@ final class DiagnosticLogger: @unchecked Sendable {
         let enabledByEnvironment = Self.isEnabledValue(environment)
         let enabledByDefaults = UserDefaults.standard.bool(forKey: Self.defaultsKey)
         self.enabled = enabledByEnvironment || enabledByDefaults
+        self.timestampFormatter = Self.makeTimestampFormatter()
 
         guard enabled else {
             self.logURL = nil
@@ -70,6 +72,7 @@ final class DiagnosticLogger: @unchecked Sendable {
         write("bundlePath=\(bundle.bundlePath)")
         write("executablePath=\(executable)")
         write("processID=\(ProcessInfo.processInfo.processIdentifier)")
+        write("timeZone=\(Self.timeZoneDescription())")
         write("logPath=\(logFilePath ?? "unavailable")")
     }
 
@@ -89,7 +92,7 @@ final class DiagnosticLogger: @unchecked Sendable {
 
         rotateIfNeeded(at: logURL)
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = timestampFormatter.string(from: Date())
         let line = "[\(timestamp)] \(message())\n"
         let data = Data(line.utf8)
 
@@ -131,6 +134,28 @@ final class DiagnosticLogger: @unchecked Sendable {
         default:
             return false
         }
+    }
+
+    nonisolated private static func makeTimestampFormatter() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS ZZZZZ"
+        return formatter
+    }
+
+    nonisolated private static func timeZoneDescription(for date: Date = Date()) -> String {
+        let timeZone = TimeZone.autoupdatingCurrent
+        let secondsFromGMT = timeZone.secondsFromGMT(for: date)
+        let hours = secondsFromGMT / 3600
+        let minutes = abs(secondsFromGMT / 60) % 60
+        let offset = String(format: "%+.2d:%02d", hours, minutes)
+
+        if let abbreviation = timeZone.abbreviation(for: date) {
+            return "\(timeZone.identifier) \(abbreviation) \(offset)"
+        }
+
+        return "\(timeZone.identifier) \(offset)"
     }
 
     nonisolated private func rotateIfNeeded(at logURL: URL) {
