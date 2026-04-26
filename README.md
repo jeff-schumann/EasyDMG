@@ -64,6 +64,8 @@ Don't want to use EasyDMG for a specific DMG? You can still right-click and Open
 
 This app doesn't connect to the internet. Nothing leaves your machine. No data is stored. 
 
+EasyDMG's privacy policy is available in [PRIVACY.md](PRIVACY.md).
+
 ## Requirements
 
 - macOS 10.15 (Catalina) or later
@@ -136,3 +138,17 @@ Contributions welcome! Please note:
 ## Support
 
 Found a bug? Have a feature request? [Open an issue](https://github.com/jefe-johann/EasyDMG/issues).
+
+EasyDMG keeps a local support log at `~/Library/Logs/EasyDMG/support.log`. It stays on your Mac unless you choose to share it, and it can help explain why EasyDMG installed an app, skipped it, or fell back to manual mode.
+
+If support needs deeper troubleshooting, you can enable verbose diagnostics:
+
+```bash
+defaults write com.jeff.easydmg diagnosticLoggingEnabled -bool YES
+```
+
+Then reproduce the issue and check `~/Library/Logs/EasyDMG/diagnostic.log`. To turn verbose diagnostics back off:
+
+```bash
+defaults delete com.jeff.easydmg diagnosticLoggingEnabled
+```

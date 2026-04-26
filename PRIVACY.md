@@ -43,7 +43,19 @@ EasyDMG also does not operate its own backend service for user tracking, analyti
 
 ## Local Logs
 
-EasyDMG may write local diagnostic messages to the macOS console while it runs. Depending on the action being performed, those messages can include file names, file paths, mount points, or installation status messages. These logs are kept on your device unless you choose to share them yourself, for example when reporting a bug.
+EasyDMG keeps a local support log on your Mac at `~/Library/Logs/EasyDMG/support.log`. This support log is enabled by default and is intended to help explain how EasyDMG handled a DMG, such as whether mounting succeeded, whether an install completed, or why EasyDMG fell back to manual mode.
+
+By default, the support log is designed to avoid recording full file paths or raw command output. It may include details such as:
+
+- EasyDMG version and build
+- DMG file names
+- app names discovered inside a DMG
+- install, mount, unmount, and trash outcomes
+- fallback reason codes such as multiple apps found or password-protected DMG
+
+EasyDMG also supports an optional verbose diagnostic log at `~/Library/Logs/EasyDMG/diagnostic.log`. Verbose diagnostics are off by default and must be explicitly enabled, for example when troubleshooting a bug. When enabled, the diagnostic log may include more detailed local information such as file paths, mount points, or compacted command output.
+
+All of these logs stay on your device unless you choose to share them yourself, for example when reporting a bug.
 
 ## Notifications
 
@@ -100,6 +112,7 @@ EasyDMG does not keep a developer-operated server-side history of the DMGs you o
 Locally on your Mac:
 
 - preference values stored in macOS user defaults remain until you change or remove them
+- local EasyDMG support and diagnostic logs remain on your Mac until they are rotated or removed
 - macOS may retain local notification settings and local console logs according to system behavior
 - any installed apps, mounted volumes, or trashed DMGs are handled according to your actions and macOS behavior
 
