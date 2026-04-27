@@ -30,10 +30,23 @@ private struct WindowConfigurator: NSViewRepresentable {
             window.titleVisibility = .hidden
             window.styleMask.insert(.fullSizeContentView)
             window.isMovableByWindowBackground = true
+            repositionTrafficLights(in: window, targetX: 16)
         }
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private func repositionTrafficLights(in window: NSWindow, targetX: CGFloat) {
+        let types: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        guard let close = window.standardWindowButton(.closeButton) else { return }
+        let dx = targetX - close.frame.origin.x
+        guard dx != 0 else { return }
+        for type in types {
+            if let button = window.standardWindowButton(type) {
+                button.setFrameOrigin(NSPoint(x: button.frame.origin.x + dx, y: button.frame.origin.y))
+            }
+        }
+    }
 }
 
 // MARK: - Root Settings View
@@ -97,7 +110,7 @@ private struct HeroHeader: View {
             }
             Spacer()
         }
-        .padding(.top, 28)
+        .padding(.top, 32)
         .padding(.bottom, 4)
         .padding(.horizontal, 16)
         .background(
