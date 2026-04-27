@@ -309,17 +309,17 @@ struct SettingsTabView: View {
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
 
-                    Button("Check for Updates…") {
-                        viewModel.checkForUpdates()
-                    }
-                    .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
-                    .disabled(!viewModel.canCheckForUpdates)
-
                     Toggle("Automatically check for updates", isOn: Binding(
                         get: { viewModel.automaticallyChecksForUpdates },
                         set: { viewModel.setAutomaticallyChecks($0) }
                     ))
                     .toggleStyle(.checkbox)
+
+                    Button("Check for Updates…") {
+                        viewModel.checkForUpdates()
+                    }
+                    .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+                    .disabled(!viewModel.canCheckForUpdates)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
