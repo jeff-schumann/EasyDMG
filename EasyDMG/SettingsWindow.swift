@@ -11,135 +11,172 @@ import Combine
 import CoreServices
 import Sparkle
 
+// MARK: - Tab Enum
+
+enum SettingsTab: String, CaseIterable {
+    case setup    = "Setup"
+    case settings = "Settings"
+    case about    = "About"
+}
+
+// MARK: - Root Settings View
+
 struct SettingsView: View {
     @StateObject private var preferences = UserPreferences.shared
-    @State private var selectedTab = 0
+    @State private var selectedTab: SettingsTab = .setup
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var theme: SettingsTheme { SettingsTheme.resolve(for: colorScheme) }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header with app icon and title (always visible)
-            HStack(spacing: 12) {
-                if let icon = NSApp.applicationIconImage {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 64, height: 64)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("EasyDMG")
-                        .font(.system(size: 24, weight: .bold))
-                    Text("Version \(Bundle.main.appVersion)")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
+            VStack(spacing: 0) {
+                HeroHeader()
+                SettingsTabBar(selection: $selectedTab, theme: theme)
             }
-            .padding(20)
-            .background(Color(NSColor.controlBackgroundColor))
-
-            Divider()
-
-            // Tabbed content
-            TabView(selection: $selectedTab) {
-                SetupTabView()
-                    .tabItem {
-                        Label("Setup", systemImage: "gearshape.2")
-                    }
-                    .tag(0)
-
-                SettingsTabView(preferences: preferences)
-                    .tabItem {
-                        Label("Settings", systemImage: "slider.horizontal.3")
-                    }
-                    .tag(1)
-
-                AboutTabView()
-                    .tabItem {
-                        Label("About", systemImage: "info.circle")
-                    }
-                    .tag(2)
+            .background(
+                colorScheme == .dark
+                    ? AnyView(SettingsPalette.heroGradient)
+                    : AnyView(Color.clear)
+            )
+            Group {
+                switch selectedTab {
+                case .setup:
+                    SetupTabView(theme: theme)
+                case .settings:
+                    SettingsTabView(preferences: preferences, theme: theme)
+                case .about:
+                    AboutTabView(theme: theme)
+                }
             }
-            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 550, height: 450)
+        .frame(width: 550, height: 500)
+        .background(theme.background)
+        .onAppear {
+            NSApp.keyWindow?.titleVisibility = .hidden
+        }
+    }
+}
+
+// MARK: - Hero Header
+
+private struct HeroHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: colorScheme == .dark ? 14 : 4) {
+            Image("wizardhamster")
+                .resizable()
+                .frame(width: 84, height: 84)
+                .cornerRadius(16)
+            VStack(alignment: .leading, spacing: 5) {
+                Text("EasyDMG")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "F5E6C8") : Color(hex: "231A12"))
+                    .tracking(-0.5)
+                Text("v\(Bundle.main.appVersion)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "D4B896") : Color(hex: "7D6A58"))
+            }
+            Spacer()
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .background(
+            colorScheme == .dark
+                ? AnyView(Color.clear)
+                : AnyView(SettingsPalette.heroBackground)
+        )
     }
 }
 
 // MARK: - Setup Tab
 
 struct SetupTabView: View {
+    let theme: SettingsTheme
     @State private var isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Set as Default for DMG Files")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 24) {
 
-                if isDefault {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.system(size: 18))
-                        Text("EasyDMG is your default app for DMG files.")
-                            .foregroundColor(.secondary)
+                // Set as Default section
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Set as Default")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(theme.text)
+
+                    if isDefault {
+                        HStack(spacing: 8) {
+                            Text("✓")
+                                .font(.system(size: 16))
+                            Text("EasyDMG is your default app for DMG files.")
+                                .font(.system(size: 13))
+                        }
+                        .foregroundStyle(theme.successGreen)
+                    } else {
+                        Text("Make EasyDMG automatically handle DMG files when you double-click them.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.muted)
+
+                        Button("Set as Default for DMG Files") {
+                            DefaultHandlerHelper.setAsDefaultDMGHandler()
+                            isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
+                        }
+                        .buttonStyle(AmberFilledButtonStyle())
                     }
-                    .padding(.vertical, 4)
-                } else {
-                    Text("Make EasyDMG automatically handle DMG files when you double-click them.")
-                        .foregroundColor(.secondary)
+                }
 
-                    Button(action: {
-                        DefaultHandlerHelper.setAsDefaultDMGHandler()
-                        isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
-                    }) {
-                        Label("Set as Default for DMG Files", systemImage: "checkmark.circle")
+                Rectangle()
+                    .fill(theme.border)
+                    .frame(height: 1)
+
+                // Manual setup steps
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Manual Setup")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(theme.text)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        StepBubble(number: 1, text: "Right-click any .dmg file",           textColor: theme.text)
+                        StepBubble(number: 2, text: "Select \"Get Info\"",                  textColor: theme.text)
+                        StepBubble(number: 3, text: "Under \"Open with:\" choose EasyDMG", textColor: theme.text)
+                        StepBubble(number: 4, text: "Click \"Change All...\"",              textColor: theme.text)
                     }
-                    .controlSize(.large)
+
+                    HStack {
+                        Spacer()
+                        Image("easydmg-select")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 395)
+                            .cornerRadius(8)
+                            .shadow(radius: 2)
+                        Spacer()
+                    }
+                    .padding(.top, 8)
                 }
 
-                Divider()
+                Rectangle()
+                    .fill(theme.border)
+                    .frame(height: 1)
 
-                Text("Manual Setup")
-                    .font(.headline)
+                // Open With section
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Open with EasyDMG Without Setting as Default")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(theme.text)
 
-                Text("You can also set the default via Finder:")
-                    .foregroundColor(.secondary)
-
-                VStack(alignment: .leading, spacing: 12) {
-                    StepView(number: 1, text: "Right-click any .dmg file")
-                    StepView(number: 2, text: "Select \"Get Info\"")
-                    StepView(number: 3, text: "Under \"Open with:\" choose EasyDMG")
-                    StepView(number: 4, text: "Click \"Change All...\"")
+                    Text("Right click any DMG and select 'Open With' to have EasyDMG seamlessly handle installation and cleanup.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(theme.muted)
+                        .lineSpacing(2)
                 }
-                .padding(.leading, 8)
-
-                // Screenshot
-                HStack {
-                    Spacer()
-                    Image("easydmg-select")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 395)
-                        .cornerRadius(8)
-                        .shadow(radius: 2)
-                    Spacer()
-                }
-                .padding(.top, 8)
-
-                Divider()
-
-                Text("Open with EasyDMG Without Setting as Default")
-                    .font(.headline)
-
-                Text("Right click any DMG and select 'Open With' to have EasyDMG seamlessly handle app installation and cleanup.")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding([.horizontal, .bottom])
-            .padding(.top, 8)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
         }
         .onAppear {
             isDefault = DefaultHandlerHelper.isDefaultDMGHandler()
@@ -176,60 +213,50 @@ enum DefaultHandlerHelper {
     }
 }
 
-struct StepView: View {
-    let number: Int
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor)
-                    .frame(width: 24, height: 24)
-                Text("\(number)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white)
-            }
-            Text(text)
-        }
-    }
-}
-
 // MARK: - About Tab
 
 struct AboutTabView: View {
+    let theme: SettingsTheme
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 11) {
                 Text("Installing simple Mac apps should be one click!")
-                    .font(.system(size: 14))
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.text)
+                    .lineSpacing(3)
 
                 Text("The standard DMG workflow is clunky and annoying: mount the DMG, drag the app to Applications, go find it in Applications, eject the disk, and then send the DMG to the trash (or forgetting the last two steps, and having a GB of old DMGs in your downloads folder 🫠).")
-                    .font(.system(size: 14))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.muted)
+                    .lineSpacing(3)
 
                 Text("EasyDMG is a simple, tiny utility that handles all of those steps automatically: mount, install, tidy up, done! The app doesn't need to be running - no dock icon, no menu bar icon, it just opens when needed and closes when finished.")
-                    .font(.system(size: 14))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.muted)
+                    .lineSpacing(3)
 
                 Text("If a DMG contains something unusual, like a license agreement, a .pkg installer, or a non-standard setup, EasyDMG won't guess. It simply opens the image and lets you take it from there.")
-                    .font(.system(size: 14))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.muted)
+                    .lineSpacing(3)
 
-                HStack(spacing: 16) {
-                    Button(action: {
+                HStack(spacing: 8) {
+                    Button("GitHub ↗") {
                         NSWorkspace.shared.open(URL(string: "https://github.com/jefe-johann/EasyDMG")!)
-                    }) {
-                        Label("GitHub", systemImage: "link")
                     }
+                    .buttonStyle(AmberOutlineButtonStyle(theme: theme))
 
-                    Button(action: {
+                    Button("Report Issue ↗") {
                         NSWorkspace.shared.open(URL(string: "https://github.com/jefe-johann/EasyDMG/issues")!)
-                    }) {
-                        Label("Report Issue", systemImage: "exclamationmark.bubble")
                     }
+                    .buttonStyle(AmberOutlineButtonStyle(theme: theme))
                 }
+                .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding([.horizontal, .bottom])
-            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
         }
     }
 }
@@ -238,69 +265,83 @@ struct AboutTabView: View {
 
 struct SettingsTabView: View {
     @ObservedObject var preferences: UserPreferences
+    let theme: SettingsTheme
+    @EnvironmentObject private var viewModel: CheckForUpdatesViewModel
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Installation Preferences")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 24) {
+                // Installation Preferences
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Installation Preferences")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(theme.text)
 
-                VStack(alignment: .leading, spacing: 16) {
-                    // Feedback mode picker
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Installation feedback:")
-                            .font(.body)
-
-                        Picker("", selection: $preferences.feedbackMode) {
-                            ForEach(FeedbackMode.allCases) { mode in
-                                Text(mode.displayName).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: 400, alignment: .leading)
-                    }
-
-                    Toggle("Automatically move DMG to trash after installation", isOn: $preferences.autoTrashDMG)
+                    Toggle("Move DMG to trash after installation", isOn: $preferences.autoTrashDMG)
                         .toggleStyle(.checkbox)
 
                     Toggle("Reveal app in Finder after installation", isOn: $preferences.revealInFinder)
                         .toggleStyle(.checkbox)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Installation feedback:")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(theme.muted)
+
+                        InlineSegmentedPicker(
+                            selection: $preferences.feedbackMode,
+                            options: Array(FeedbackMode.allCases),
+                            label: { $0.shortName },
+                            theme: theme
+                        )
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.leading, 8)
 
-                Divider()
-                    .padding(.vertical, 8)
+                Rectangle()
+                    .fill(theme.border)
+                    .frame(height: 1)
 
-                Text("Updates")
-                    .font(.headline)
+                // Updates
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Updates")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(theme.text)
 
-                CheckForUpdatesView()
-                    .padding(.leading, 8)
+                    Button("Check for Updates…") {
+                        viewModel.checkForUpdates()
+                    }
+                    .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+                    .disabled(!viewModel.canCheckForUpdates)
+
+                    Toggle("Automatically check for updates", isOn: Binding(
+                        get: { viewModel.automaticallyChecksForUpdates },
+                        set: { viewModel.setAutomaticallyChecks($0) }
+                    ))
+                    .toggleStyle(.checkbox)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding([.horizontal, .bottom])
-            .padding(.top, 8)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 20)
         }
     }
 }
 
 // MARK: - Feedback Mode
 
-enum FeedbackMode: String, CaseIterable, Identifiable {
-    case progressBar = "progressBar"
+enum FeedbackMode: String, CaseIterable, Identifiable, Hashable {
+    case progressBar  = "progressBar"
     case notification = "notification"
-    case silent = "silent"
+    case silent       = "silent"
 
     var id: String { rawValue }
 
-    var displayName: String {
+    var shortName: String {
         switch self {
-        case .progressBar:
-            return "Show progress bar during DMG handling"
-        case .notification:
-            return "Show notification when installation is complete"
-        case .silent:
-            return "Silent"
+        case .progressBar:  return "Progress bar"
+        case .notification: return "Notification"
+        case .silent:       return "Silent"
         }
     }
 }
@@ -311,28 +352,21 @@ class UserPreferences: ObservableObject {
     static let shared = UserPreferences()
 
     @Published var autoTrashDMG: Bool {
-        didSet {
-            UserDefaults.standard.set(autoTrashDMG, forKey: "autoTrashDMG")
-        }
+        didSet { UserDefaults.standard.set(autoTrashDMG, forKey: "autoTrashDMG") }
     }
 
     @Published var revealInFinder: Bool {
-        didSet {
-            UserDefaults.standard.set(revealInFinder, forKey: "revealInFinder")
-        }
+        didSet { UserDefaults.standard.set(revealInFinder, forKey: "revealInFinder") }
     }
 
     @Published var feedbackMode: FeedbackMode {
-        didSet {
-            UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode")
-        }
+        didSet { UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode") }
     }
 
     private init() {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
 
-        // Default to progress bar mode
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
     }
@@ -349,12 +383,10 @@ final class CheckForUpdatesViewModel: ObservableObject {
     init(updater: SPUUpdater) {
         self.updater = updater
 
-        // Observe canCheckForUpdates reactively
         updater.publisher(for: \.canCheckForUpdates)
             .receive(on: DispatchQueue.main)
             .assign(to: &$canCheckForUpdates)
 
-        // Observe automaticallyChecksForUpdates reactively
         updater.publisher(for: \.automaticallyChecksForUpdates)
             .receive(on: DispatchQueue.main)
             .assign(to: &$automaticallyChecksForUpdates)
@@ -366,31 +398,6 @@ final class CheckForUpdatesViewModel: ObservableObject {
 
     func setAutomaticallyChecks(_ value: Bool) {
         updater.automaticallyChecksForUpdates = value
-    }
-}
-
-struct CheckForUpdatesView: View {
-    @EnvironmentObject var viewModel: CheckForUpdatesViewModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button("Check for Updates...") {
-                    viewModel.checkForUpdates()
-                }
-                .disabled(!viewModel.canCheckForUpdates)
-
-                Spacer()
-            }
-
-            Toggle("Automatically check for updates", isOn: Binding(
-                get: { viewModel.automaticallyChecksForUpdates },
-                set: { newValue in
-                    viewModel.setAutomaticallyChecks(newValue)
-                }
-            ))
-            .toggleStyle(.checkbox)
-        }
     }
 }
 
