@@ -21,6 +21,7 @@ struct EasyDMGApp: App {
             SettingsView()
                 .environmentObject(appDelegate.updaterViewModel)
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .commands {
             // Remove file menu commands

@@ -19,6 +19,23 @@ enum SettingsTab: String, CaseIterable {
     case about    = "About"
 }
 
+// MARK: - Window Configurator
+
+private struct WindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.styleMask.insert(.fullSizeContentView)
+            window.isMovableByWindowBackground = true
+        }
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 // MARK: - Root Settings View
 
 struct SettingsView: View {
@@ -53,9 +70,8 @@ struct SettingsView: View {
         }
         .frame(width: 550, height: 500)
         .background(theme.background)
-        .onAppear {
-            NSApp.keyWindow?.titleVisibility = .hidden
-        }
+        .background(WindowConfigurator())
+        .ignoresSafeArea(.all, edges: .top)
     }
 }
 
@@ -81,7 +97,7 @@ private struct HeroHeader: View {
             }
             Spacer()
         }
-        .padding(.top, 14)
+        .padding(.top, 28)
         .padding(.bottom, 4)
         .padding(.horizontal, 16)
         .background(
