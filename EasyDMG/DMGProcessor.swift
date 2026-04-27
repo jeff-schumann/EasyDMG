@@ -442,6 +442,30 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private nonisolated static func parseMountPoint(fromAttachPlist data: Data) -> String? {
+        do {
+            let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            guard let root = plist as? [String: Any],
+                  let systemEntities = root["system-entities"] as? [[String: Any]] else {
+                DiagnosticLogger.shared.diagnostic("hdiutil plist missing expected system-entities structure")
+                return nil
+            }
+
+            for entity in systemEntities {
+                if let mountPoint = entity["mount-point"] as? String, !mountPoint.isEmpty {
+                    DiagnosticLogger.shared.diagnostic("Parsed mount point from plist: \(mountPoint)")
+                    return mountPoint
+                }
+            }
+
+            DiagnosticLogger.shared.diagnostic("No mount-point found in hdiutil plist output")
+            return nil
+        } catch {
+            DiagnosticLogger.shared.diagnostic("Failed to parse hdiutil plist output: \(error)")
+            return nil
+        }
+    }
+
     private func mountDMG(at path: String, dmgName: String, progress: Double) async -> MountResult {
         diagnostic("Mounting \(path)...")
         support(event: "mount_start", details: ["dmg": dmgName])
@@ -453,7 +477,7 @@ class DMGProcessor: ObservableObject {
             DiagnosticLogger.shared.diagnostic("Running hdiutil attach for \(path)")
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            task.arguments = ["attach", path, "-nobrowse", "-readonly", "-noautoopen"]
+            task.arguments = ["attach", path, "-nobrowse", "-readonly", "-noautoopen", "-plist"]
 
             let pipe = Pipe()
             let errorPipe = Pipe()
@@ -487,41 +511,18 @@ class DMGProcessor: ObservableObject {
                 }
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
                 DiagnosticLogger.shared.diagnostic("hdiutil attach succeeded")
-                if !output.isEmpty {
+                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
                     DiagnosticLogger.shared.diagnostic(
                         "hdiutil attach stdout: \(DiagnosticLogger.compact(output))"
                     )
                 }
 
-                if output.lowercased().contains("error") ||
-                    output.lowercased().contains("failed") ||
-                    output.lowercased().contains("invalid")
-                {
-                    DiagnosticLogger.shared.diagnostic("Unexpected mount output detected")
+                guard let mountPoint = Self.parseMountPoint(fromAttachPlist: data) else {
                     return MountResult.failed(exitStatus: task.terminationStatus)
                 }
 
-                let lines = output.components(separatedBy: .newlines)
-                for line in lines {
-                    if let range = line.range(of: "/Volumes/") {
-                        let mountPoint = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespaces)
-                        if let endIndex = mountPoint.firstIndex(where: { $0.isNewline || $0 == "\t" }) {
-                            let parsedMountPoint = String(mountPoint[..<endIndex])
-                            DiagnosticLogger.shared.diagnostic("Parsed mount point: \(parsedMountPoint)")
-                            return MountResult.mounted(
-                                mountPoint: parsedMountPoint,
-                                exitStatus: task.terminationStatus
-                            )
-                        }
-                        DiagnosticLogger.shared.diagnostic("Parsed mount point: \(mountPoint)")
-                        return MountResult.mounted(mountPoint: mountPoint, exitStatus: task.terminationStatus)
-                    }
-                }
-
-                DiagnosticLogger.shared.diagnostic("Failed to determine mount point from output")
-                return MountResult.failed(exitStatus: task.terminationStatus)
+                return MountResult.mounted(mountPoint: mountPoint, exitStatus: task.terminationStatus)
 
             } catch {
                 DiagnosticLogger.shared.diagnostic("Error mounting DMG: \(error)")

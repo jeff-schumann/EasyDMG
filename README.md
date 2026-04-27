@@ -68,7 +68,8 @@ EasyDMG's privacy policy is available in [PRIVACY.md](PRIVACY.md).
 
 ## Requirements
 
-- macOS 10.15 (Catalina) or later
+- macOS 13 (Ventura) or later
+- Tested regularly on macOS 15.7
 
 ## Distribution
 
