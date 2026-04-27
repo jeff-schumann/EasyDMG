@@ -51,7 +51,8 @@ struct SettingsTabBar: View {
         }
         .padding(3)
         .background(theme.tabTrack, in: RoundedRectangle(cornerRadius: 8))
-        .padding(.vertical, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
         .padding(.horizontal, 16)
         .background(theme.tabBarBackground)
         .overlay(alignment: .bottom) {

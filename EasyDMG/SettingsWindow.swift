@@ -73,15 +73,16 @@ private struct HeroHeader: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("EasyDMG")
                     .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(colorScheme == .dark ? Color(hex: "F5E6C8") : Color(hex: "231A12"))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "FDF8EC") : Color(hex: "231A12"))
                     .tracking(-0.5)
                 Text("v\(Bundle.main.appVersion)")
                     .font(.system(size: 12))
-                    .foregroundStyle(colorScheme == .dark ? Color(hex: "D4B896") : Color(hex: "7D6A58"))
+                    .foregroundStyle(colorScheme == .dark ? Color(hex: "EDDFBD") : Color(hex: "7D6A58"))
             }
             Spacer()
         }
-        .padding(.vertical, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
         .padding(.horizontal, 16)
         .background(
             colorScheme == .dark
