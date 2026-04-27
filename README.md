@@ -10,31 +10,47 @@
   </strong></font>
 </div>
 
+## What EasyDMG Does
+
+After setting EasyDMG as your default app for opening DMGs (instructions below - but it's just "click the button"), opening any DMG will automatically:
+
+1. Mount the DMG
+2. Copy the app to /Applications folder
+3. Open Applications and highlight the new app, ready for you to run it
+4. Unmount the DMG
+5. Trash the DMG (optional via Settings)
+
 ## Features
 
-- **Zero-click installation**: Set EasyDMG as your default DMG handler and forget about it
-- **Smart automation**: Automatically detects .app files and copies them to /Applications
-- **Flexible feedback**: Choose between progress window, notifications, or silent mode
+- **It's EASY!**: Set EasyDMG as your default DMG handler and forget about it. 
+- **It's simple**: After setting as your default, the app only runs when opening a DMG. Doesn't take up space in your dock or menubar, it's gone until you need it
+- **It's fun**: Enjoy the hamster progress bar if enabled 🪄
+- **It's native**: Built with Swift for MacOS, it's quick and seamless
+- **Flexible settings**: Choose between progress window, notifications, or silent mode
 - **Save disk space**: Optionally moves DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
-- **Simple only**: If EasyDMG encounters anything unusual (license agreements, multiple apps, pkg installers), it opens the DMG and lets you handle it manually. It only automates the simple, common case.
-- **Safety first**: Prompts for confirmation when apps already exist
-- **Automatic updates**: Built-in Sparkle integration for seamless updates
+- **Safety third**: If EasyDMG encounters anything unusual (license agreements, multiple apps, pkg installers), it opens the DMG and lets you handle it manually. It only automates the simple, common case.
+- **Automatic updates**: Built-in Sparkle integration for easy updates
 
 ## Screenshots
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/f5322123-caed-4677-993e-fec5a83cd6a8" alt="EasyDMG Progress Bar" width="500">
+<img width="500" alt="EasyDMG Settings Window" src="https://github.com/user-attachments/assets/6e6b094e-5a3e-403a-89a8-1965cef1ccfb" />
 </p>
 <p align="center">
-<img width="331" height="300" alt="SCR-20260119-cqjv" src="https://github.com/user-attachments/assets/6e6b094e-5a3e-403a-89a8-1965cef1ccfb" />
+  <img src="https://github.com/user-attachments/assets/d5632cd3-7e68-4e35-8568-d9ebcfc3dcc7" alt="EasyDMG Progress Bar" width="425" style="border-radius: 15px;">
 </p>
 
 ## Installation
 
-Download the latest release from the [Releases](https://github.com/jefe-johann/EasyDMG/releases) page and drag to Applications.
+Download the latest release from the [Releases](https://github.com/jefe-johann/EasyDMG/releases) page and drag to Applications. Enjoy it.. it could be the last time you perform this annoying task!
 
 ### Setting as Default DMG Handler
 
+1. Simply click the button in settings :-)
+
+OR
+
+Manually set:
 1. Right-click any DMG file
 2. Select **Get Info**
 3. Under "Open with:", select **EasyDMG**
@@ -42,10 +58,17 @@ Download the latest release from the [Releases](https://github.com/jefe-johann/E
 
 Now all DMG files will automatically install when opened.
 
+Don't want to use EasyDMG for a specific DMG? You can still right-click and Open With DiskImageMounter any time.
+
+## Privacy
+
+This app doesn't connect to the internet. Nothing leaves your machine. No data is stored. 
+
+EasyDMG's privacy policy is available in [PRIVACY.md](PRIVACY.md).
+
 ## Requirements
 
 - macOS 10.15 (Catalina) or later
-- Notarized and code-signed for security
 
 ## Distribution
 
@@ -116,6 +139,16 @@ Contributions welcome! Please note:
 
 Found a bug? Have a feature request? [Open an issue](https://github.com/jefe-johann/EasyDMG/issues).
 
-## Privacy
+EasyDMG keeps a local support log at `~/Library/Logs/EasyDMG/support.log`. It stays on your Mac unless you choose to share it, and it can help explain why EasyDMG installed an app, skipped it, or fell back to manual mode.
 
-EasyDMG's privacy policy is available in [PRIVACY.md](PRIVACY.md).
+If support needs deeper troubleshooting, you can enable verbose diagnostics:
+
+```bash
+defaults write com.jeff.easydmg diagnosticLoggingEnabled -bool YES
+```
+
+Then reproduce the issue and check `~/Library/Logs/EasyDMG/diagnostic.log`. To turn verbose diagnostics back off:
+
+```bash
+defaults delete com.jeff.easydmg diagnosticLoggingEnabled
+```

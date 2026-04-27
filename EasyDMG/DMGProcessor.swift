@@ -13,6 +13,66 @@ import UserNotifications
 
 @MainActor
 class DMGProcessor: ObservableObject {
+    private enum ManualFallbackReason: String, Sendable {
+        case genericMountFailure = "generic_mount_failure"
+        case passwordProtected = "password_protected"
+        case noAppFound = "no_app_found"
+        case multipleAppsFound = "multiple_apps_found"
+        case licenseRequired = "license_required"
+    }
+
+    private enum MountResult: Sendable {
+        case mounted(mountPoint: String, exitStatus: Int32)
+        case passwordProtected(exitStatus: Int32)
+        case failed(exitStatus: Int32?)
+    }
+
+    private enum UnmountResult: Sendable {
+        case clean
+        case retrySuccess
+        case forceSuccess
+        case failed(exitStatus: Int32?)
+
+        var supportValue: String {
+            switch self {
+            case .clean:
+                return "clean"
+            case .retrySuccess:
+                return "retry_success"
+            case .forceSuccess:
+                return "force_success"
+            case .failed:
+                return "failed"
+            }
+        }
+
+        var exitStatus: Int32? {
+            switch self {
+            case .clean, .retrySuccess, .forceSuccess:
+                return 0
+            case let .failed(status):
+                return status
+            }
+        }
+    }
+
+    private enum ApplicationsFolderIssue: String {
+        case missing = "applications_missing"
+        case notDirectory = "applications_not_directory"
+        case notWritable = "applications_not_writable"
+
+        var message: String {
+            switch self {
+            case .missing:
+                return "/Applications folder does not exist"
+            case .notDirectory:
+                return "/Applications is not a directory"
+            case .notWritable:
+                return "/Applications folder is not writable"
+            }
+        }
+    }
+
     @Published var isProcessing = false
     private var currentFeedbackMode: FeedbackMode = .progressBar
     private var pendingDMGURLs: [URL] = []
@@ -25,8 +85,55 @@ class DMGProcessor: ObservableObject {
         (12_000_000_000, "🐹 Hamster is strong, but app is big...")
     ]
 
+    private func diagnostic(_ message: @autoclosure () -> String) {
+        DiagnosticLogger.shared.diagnostic(message())
+    }
+
+    private func support(event: String, details: [String: String] = [:]) {
+        DiagnosticLogger.shared.support(event: event, details: details)
+    }
+
+    private func volumeName(from mountPoint: String) -> String {
+        URL(fileURLWithPath: mountPoint).lastPathComponent
+    }
+
+    private func appName(from path: String) -> String {
+        URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private func appNames(from paths: [String]) -> [String] {
+        paths.map(appName(from:))
+    }
+
+    private func joinedNames(_ names: [String]) -> String {
+        names.joined(separator: "|")
+    }
+
+    private func boolString(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
+    private func errorDetails(_ error: Error) -> [String: String] {
+        let nsError = error as NSError
+        return [
+            "error_code": String(nsError.code),
+            "error_domain": nsError.domain
+        ]
+    }
+
+    private func recordCompletion(
+        dmgName: String,
+        outcome: String,
+        details: [String: String] = [:]
+    ) {
+        var mergedDetails = details
+        mergedDetails["dmg"] = dmgName
+        mergedDetails["outcome"] = outcome
+        support(event: "processing_complete", details: mergedDetails)
+    }
+
     private func showProgress(_ message: String, progress: Double) {
-        DiagnosticLogger.shared.log("📝 \(message) (\(Int(progress * 100))%)")
+        diagnostic("📝 \(message) (\(Int(progress * 100))%)")
 
         // Only show progress window if feedback mode is progress bar
         if currentFeedbackMode == .progressBar {
@@ -54,12 +161,11 @@ class DMGProcessor: ObservableObject {
                 try await Task.sleep(nanoseconds: delayNanos)
                 if !Task.isCancelled && currentFeedbackMode == .progressBar {
                     ProgressWindowController.shared.update(message: magicMsg, progress: progress)
-                    DiagnosticLogger.shared.log("📝 \(magicMsg) (\(Int(progress * 100))%)")
+                    DiagnosticLogger.shared.diagnostic("📝 \(magicMsg) (\(Int(progress * 100))%)")
                 }
             }
         }
 
-        // Wait for operation to complete, then cancel all timers
         do {
             let result = try await operationTask.value
             timerTasks.forEach { $0.cancel() }
@@ -78,23 +184,20 @@ class DMGProcessor: ObservableObject {
     ) async -> T {
         showProgress(message, progress: progress)
 
-        // Run the operation on a background thread so timers can fire
         let operationTask = Task.detached(priority: .userInitiated) {
             operation()
         }
 
-        // Start timer tasks for each progressive message
         let timerTasks = magicMessages.map { delayNanos, magicMsg in
             Task { @MainActor [currentFeedbackMode] in
                 try? await Task.sleep(nanoseconds: delayNanos)
                 if !Task.isCancelled && currentFeedbackMode == .progressBar {
                     ProgressWindowController.shared.update(message: magicMsg, progress: progress)
-                    DiagnosticLogger.shared.log("📝 \(magicMsg) (\(Int(progress * 100))%)")
+                    DiagnosticLogger.shared.diagnostic("📝 \(magicMsg) (\(Int(progress * 100))%)")
                 }
             }
         }
 
-        // Wait for operation to complete, then cancel all timers
         let result = await operationTask.value
         timerTasks.forEach { $0.cancel() }
         return result
@@ -113,11 +216,10 @@ class DMGProcessor: ObservableObject {
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            DiagnosticLogger.shared.log("❌ Notification error: \(error)")
+            diagnostic("❌ Notification error: \(error)")
         }
     }
 
-    // Request notification permissions if needed
     private func requestNotificationPermissionsIfNeeded() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
 
@@ -130,7 +232,6 @@ class DMGProcessor: ObservableObject {
     private func effectiveFeedbackMode() async -> FeedbackMode {
         let userMode = UserPreferences.shared.feedbackMode
 
-        // If user wants notifications, check if permission is granted
         if userMode == .notification {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             if settings.authorizationStatus == .denied {
@@ -143,15 +244,23 @@ class DMGProcessor: ObservableObject {
 
     func enqueueDMGs(_ urls: [URL]) {
         guard !urls.isEmpty else {
-            DiagnosticLogger.shared.log("enqueueDMGs called with no DMG URLs")
+            diagnostic("enqueueDMGs called with no DMG URLs")
             return
         }
 
-        DiagnosticLogger.shared.log("enqueueDMGs adding \(urls.count) URL(s); pending before add=\(pendingDMGURLs.count)")
+        diagnostic("enqueueDMGs adding \(urls.count) URL(s); pending before add=\(pendingDMGURLs.count)")
+        support(
+            event: "queue_enqueue",
+            details: [
+                "dmg_count": String(urls.count),
+                "dmg_names": joinedNames(urls.map(\.lastPathComponent)),
+                "pending_before": String(pendingDMGURLs.count)
+            ]
+        )
         pendingDMGURLs.append(contentsOf: urls)
 
         guard !isDrainingQueue else {
-            DiagnosticLogger.shared.log("DMG queue already active; appended URL(s) for existing drain")
+            diagnostic("DMG queue already active; appended URL(s) for existing drain")
             return
         }
 
@@ -168,11 +277,12 @@ class DMGProcessor: ObservableObject {
 
         isDrainingQueue = true
         isProcessing = true
-        DiagnosticLogger.shared.log("DMG queue started with \(pendingDMGURLs.count) pending URL(s)")
+        diagnostic("DMG queue started with \(pendingDMGURLs.count) pending URL(s)")
+        support(event: "queue_start", details: ["pending_count": String(pendingDMGURLs.count)])
 
         while !pendingDMGURLs.isEmpty {
             let nextURL = pendingDMGURLs.removeFirst()
-            DiagnosticLogger.shared.log("Processing next DMG: \(nextURL.path); remaining after dequeue=\(pendingDMGURLs.count)")
+            diagnostic("Processing next DMG: \(nextURL.path); remaining after dequeue=\(pendingDMGURLs.count)")
             await processNextDMG(at: nextURL)
         }
 
@@ -180,7 +290,7 @@ class DMGProcessor: ObservableObject {
         isDrainingQueue = false
         ProgressWindowController.shared.hide()
 
-        DiagnosticLogger.shared.log("✅ Processing queue complete, quitting app")
+        diagnostic("✅ Processing queue complete, quitting app")
         NSApp.terminate(nil)
     }
 
@@ -190,93 +300,128 @@ class DMGProcessor: ObservableObject {
     }
 
     private func processNextDMG(at url: URL) async {
-        DiagnosticLogger.shared.log("processNextDMG started path=\(url.path)")
+        let currentDMGName = url.lastPathComponent
+        diagnostic("processNextDMG started path=\(url.path)")
+        support(event: "dmg_begin", details: ["dmg": currentDMGName])
 
-        // Request notification permissions early (before checking effective mode)
         await requestNotificationPermissionsIfNeeded()
 
-        // Determine effective feedback mode (with fallback for denied notifications)
         currentFeedbackMode = await effectiveFeedbackMode()
-        DiagnosticLogger.shared.log("Effective feedback mode: \(currentFeedbackMode.rawValue)")
+        diagnostic("Effective feedback mode: \(currentFeedbackMode.rawValue)")
+        support(
+            event: "feedback_mode",
+            details: ["dmg": currentDMGName, "mode": currentFeedbackMode.rawValue]
+        )
 
-        // Show progress window only in progress bar mode
         if currentFeedbackMode == .progressBar {
             ProgressWindowController.shared.show(message: "Preparing...", progress: 0.0)
         } else {
             ProgressWindowController.shared.hide()
         }
 
-        // Validate the DMG file exists
         guard FileManager.default.fileExists(atPath: url.path) else {
-            DiagnosticLogger.shared.log("DMG file missing before processing: \(url.path)")
+            diagnostic("DMG file missing before processing: \(url.path)")
+            support(event: "processing_error", details: ["dmg": currentDMGName, "reason": "file_not_found"])
+            recordCompletion(dmgName: currentDMGName, outcome: "error", details: ["reason": "file_not_found"])
             await handleError("File not found: \(url.lastPathComponent)")
             return
         }
 
-        // Check for license agreement in DMG
         // TODO: Fix license detection - currently giving false positives without sandbox
         // if await hasLicenseAgreement(dmgPath: url.path) {
-        //     await openForManualInstallation(dmgPath: url.path, reason: "DMG requires manual installation")
+        //     await openForManualInstallation(
+        //         dmgPath: url.path,
+        //         dmgName: currentDMGName,
+        //         reason: .licenseRequired
+        //     )
         //     return
         // }
 
-        // Mount the DMG (Step 1: 0% → 20%)
-        guard let mountPoint = await mountDMG(at: url.path, progress: 0.0) else {
-            await openForManualInstallation(dmgPath: url.path, reason: "DMG requires manual installation")
-            return
-        }
+        let mountResult = await mountDMG(at: url.path, dmgName: currentDMGName, progress: 0.0)
 
-        // Password-protected DMGs can't be mounted non-interactively
-        if mountPoint == "PASSWORD_PROTECTED" {
+        let mountPoint: String
+        switch mountResult {
+        case let .mounted(resolvedMountPoint, _):
+            mountPoint = resolvedMountPoint
+
+        case .passwordProtected:
             showProgress("DMG is password-protected, opening for manual install...", progress: 0.0)
-            await openForManualInstallation(dmgPath: url.path, reason: "DMG is password-protected")
+            await openForManualInstallation(
+                dmgPath: url.path,
+                dmgName: currentDMGName,
+                reason: .passwordProtected
+            )
+            return
+
+        case .failed:
+            await openForManualInstallation(
+                dmgPath: url.path,
+                dmgName: currentDMGName,
+                reason: .genericMountFailure
+            )
             return
         }
 
-        // Find .app files in the mounted DMG (Step 2 starts: 20%)
         showProgress("Scanning for apps...", progress: 0.2)
         let appFiles = findAppFiles(in: mountPoint)
 
-        // Filter out helper/uninstaller apps if there's a main app
         let mainApps = appFiles.filter { path in
-            let name = (path as NSString).lastPathComponent.lowercased()
+            let name = appName(from: path).lowercased()
             return !name.contains("uninstall") &&
                    !name.contains("installer") &&
                    !name.contains("helper") &&
                    !name.contains("readme")
         }
 
-        // Use filtered list if we got exactly 1 main app, otherwise use original list
         let finalAppFiles = mainApps.count == 1 ? mainApps : appFiles
+        let finalAppNames = appNames(from: finalAppFiles)
+        support(
+            event: "app_scan_result",
+            details: [
+                "app_count": String(finalAppFiles.count),
+                "app_names": joinedNames(finalAppNames),
+                "dmg": currentDMGName,
+                "raw_app_count": String(appFiles.count),
+                "volume": volumeName(from: mountPoint)
+            ]
+        )
 
-        // Handle different scenarios
         switch finalAppFiles.count {
         case 0:
-            DiagnosticLogger.shared.log("Manual fallback: no .app files found at \(mountPoint)")
-            await openForManualInstallation(mountPoint: mountPoint, reason: "No .app files found")
+            diagnostic("Manual fallback: no .app files found at \(mountPoint)")
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                dmgName: currentDMGName,
+                reason: .noAppFound,
+                details: [
+                    "app_count": "0",
+                    "volume": volumeName(from: mountPoint)
+                ]
+            )
             return
 
         case 1:
-            // Single app found - proceed with installation
             let appPath = finalAppFiles[0]
-            DiagnosticLogger.shared.log("Installing: \((appPath as NSString).lastPathComponent) from \(appPath)")
-            await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path)
+            diagnostic("Installing: \(appName(from: appPath)) from \(appPath)")
+            await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path, dmgName: currentDMGName)
 
         default:
-            let appNames = finalAppFiles.map { ($0 as NSString).lastPathComponent }
-            DiagnosticLogger.shared.log("Manual fallback: multiple .app files found (\(finalAppFiles.count)): \(appNames)")
+            diagnostic("Manual fallback: multiple .app files found (\(finalAppFiles.count)): \(finalAppNames)")
             await openForManualInstallation(
                 mountPoint: mountPoint,
-                reason: "Multiple .app files found: \(appNames.joined(separator: ", "))"
+                dmgName: currentDMGName,
+                reason: .multipleAppsFound,
+                details: [
+                    "app_count": String(finalAppFiles.count),
+                    "app_names": joinedNames(finalAppNames),
+                    "volume": volumeName(from: mountPoint)
+                ]
             )
             return
         }
-
     }
 
-    // Check if DMG has a license agreement
     private func hasLicenseAgreement(dmgPath: String) async -> Bool {
-        // Use hdiutil imageinfo to check for license
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
         task.arguments = ["imageinfo", dmgPath]
@@ -290,51 +435,25 @@ class DMGProcessor: ObservableObject {
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
-
-            // Check for license agreement in output
             return output.contains("Software License Agreement") && output.contains("true")
         } catch {
-            DiagnosticLogger.shared.log("Error checking for license: \(error)")
+            diagnostic("Error checking for license: \(error)")
             return false
         }
     }
 
-    private nonisolated static func parseMountPoint(fromAttachPlist data: Data) -> String? {
-        do {
-            let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
-            guard let root = plist as? [String: Any],
-                  let systemEntities = root["system-entities"] as? [[String: Any]] else {
-                DiagnosticLogger.shared.log("hdiutil plist missing expected system-entities structure")
-                return nil
-            }
+    private func mountDMG(at path: String, dmgName: String, progress: Double) async -> MountResult {
+        diagnostic("Mounting \(path)...")
+        support(event: "mount_start", details: ["dmg": dmgName])
 
-            for entity in systemEntities {
-                if let mountPoint = entity["mount-point"] as? String, !mountPoint.isEmpty {
-                    DiagnosticLogger.shared.log("Parsed mount point from plist: \(mountPoint)")
-                    return mountPoint
-                }
-            }
-
-            DiagnosticLogger.shared.log("No mount-point found in hdiutil plist output")
-            return nil
-        } catch {
-            DiagnosticLogger.shared.log("Failed to parse hdiutil plist output: \(error)")
-            return nil
-        }
-    }
-
-    // Mount a DMG file and return the mount point
-    private func mountDMG(at path: String, progress: Double) async -> String? {
-        DiagnosticLogger.shared.log("Mounting \(path)...")
-
-        return await withMagicFallback(
+        let result = await withMagicFallback(
             message: "Mounting disk image...",
             progress: progress
         ) {
-            DiagnosticLogger.shared.log("Running hdiutil attach for \(path)")
+            DiagnosticLogger.shared.diagnostic("Running hdiutil attach for \(path)")
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            task.arguments = ["attach", path, "-nobrowse", "-readonly", "-noautoopen", "-plist"]
+            task.arguments = ["attach", path, "-nobrowse", "-readonly", "-noautoopen"]
 
             let pipe = Pipe()
             let errorPipe = Pipe()
@@ -349,35 +468,89 @@ class DMGProcessor: ObservableObject {
                     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                     let rawErrorOutput = String(data: errorData, encoding: .utf8) ?? ""
                     let errorOutput = rawErrorOutput.lowercased()
-                    DiagnosticLogger.shared.log("Mount failed with status \(task.terminationStatus)")
+                    DiagnosticLogger.shared.diagnostic("Mount failed with status \(task.terminationStatus)")
                     if !rawErrorOutput.isEmpty {
-                        DiagnosticLogger.shared.log(
+                        DiagnosticLogger.shared.diagnostic(
                             "hdiutil attach stderr: \(DiagnosticLogger.compact(rawErrorOutput))"
                         )
                     }
-                    if errorOutput.contains("authentication") || errorOutput.contains("passphrase") || errorOutput.contains("encrypted") {
-                        DiagnosticLogger.shared.log("Manual fallback classification: password protected or encrypted DMG")
-                        return "PASSWORD_PROTECTED"
+                    if errorOutput.contains("authentication") ||
+                        errorOutput.contains("passphrase") ||
+                        errorOutput.contains("encrypted")
+                    {
+                        DiagnosticLogger.shared.diagnostic(
+                            "Manual fallback classification: password protected or encrypted DMG"
+                        )
+                        return MountResult.passwordProtected(exitStatus: task.terminationStatus)
                     }
-                    return nil
+                    return MountResult.failed(exitStatus: task.terminationStatus)
                 }
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                DiagnosticLogger.shared.log("hdiutil attach succeeded")
-                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                    DiagnosticLogger.shared.log("hdiutil attach stdout: \(DiagnosticLogger.compact(output))")
+                let output = String(data: data, encoding: .utf8) ?? ""
+                DiagnosticLogger.shared.diagnostic("hdiutil attach succeeded")
+                if !output.isEmpty {
+                    DiagnosticLogger.shared.diagnostic(
+                        "hdiutil attach stdout: \(DiagnosticLogger.compact(output))"
+                    )
                 }
 
-                return Self.parseMountPoint(fromAttachPlist: data)
+                if output.lowercased().contains("error") ||
+                    output.lowercased().contains("failed") ||
+                    output.lowercased().contains("invalid")
+                {
+                    DiagnosticLogger.shared.diagnostic("Unexpected mount output detected")
+                    return MountResult.failed(exitStatus: task.terminationStatus)
+                }
+
+                let lines = output.components(separatedBy: .newlines)
+                for line in lines {
+                    if let range = line.range(of: "/Volumes/") {
+                        let mountPoint = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespaces)
+                        if let endIndex = mountPoint.firstIndex(where: { $0.isNewline || $0 == "\t" }) {
+                            let parsedMountPoint = String(mountPoint[..<endIndex])
+                            DiagnosticLogger.shared.diagnostic("Parsed mount point: \(parsedMountPoint)")
+                            return MountResult.mounted(
+                                mountPoint: parsedMountPoint,
+                                exitStatus: task.terminationStatus
+                            )
+                        }
+                        DiagnosticLogger.shared.diagnostic("Parsed mount point: \(mountPoint)")
+                        return MountResult.mounted(mountPoint: mountPoint, exitStatus: task.terminationStatus)
+                    }
+                }
+
+                DiagnosticLogger.shared.diagnostic("Failed to determine mount point from output")
+                return MountResult.failed(exitStatus: task.terminationStatus)
 
             } catch {
-                DiagnosticLogger.shared.log("Error mounting DMG: \(error)")
-                return nil
+                DiagnosticLogger.shared.diagnostic("Error mounting DMG: \(error)")
+                return MountResult.failed(exitStatus: nil)
             }
         }
+
+        var details = ["dmg": dmgName]
+        switch result {
+        case let .mounted(mountPoint, exitStatus):
+            details["exit_status"] = String(exitStatus)
+            details["result"] = "success"
+            details["volume"] = volumeName(from: mountPoint)
+
+        case let .passwordProtected(exitStatus):
+            details["exit_status"] = String(exitStatus)
+            details["result"] = "password_protected"
+
+        case let .failed(exitStatus):
+            if let exitStatus {
+                details["exit_status"] = String(exitStatus)
+            }
+            details["result"] = "failed"
+        }
+        support(event: "mount_result", details: details)
+
+        return result
     }
 
-    // Calculate app bundle size
     private func calculateAppSize(at path: String) -> UInt64 {
         guard let enumerator = FileManager.default.enumerator(atPath: path) else {
             return 0
@@ -394,42 +567,35 @@ class DMGProcessor: ObservableObject {
         return totalSize
     }
 
-    // Check if enough disk space available
     private func hasEnoughDiskSpace(requiredBytes: UInt64) -> Bool {
         let appFolderPath = "/Applications"
         guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: appFolderPath),
               let freeSpace = attrs[.systemFreeSize] as? UInt64 else {
-            // If we can't check, proceed anyway (defensive)
             return true
         }
 
-        // Require app size + 500MB buffer
         let bufferSize: UInt64 = 500 * 1024 * 1024
         return freeSpace > (requiredBytes + bufferSize)
     }
 
-    // Validate /Applications folder exists and is writable
-    private func validateApplicationsFolder() -> String? {
+    private func validateApplicationsFolder() -> ApplicationsFolderIssue? {
         let appFolder = "/Applications"
 
-        // Check if /Applications exists
         guard FileManager.default.fileExists(atPath: appFolder) else {
-            return "/Applications folder does not exist"
+            return .missing
         }
 
-        // Check if it's a directory (not a file)
         var isDirectory: ObjCBool = false
         FileManager.default.fileExists(atPath: appFolder, isDirectory: &isDirectory)
         guard isDirectory.boolValue else {
-            return "/Applications is not a directory"
+            return .notDirectory
         }
 
-        // Check if it's writable
         guard FileManager.default.isWritableFile(atPath: appFolder) else {
-            return "/Applications folder is not writable"
+            return .notWritable
         }
 
-        return nil  // All checks passed
+        return nil
     }
 
     private func stagedAppURL(for appName: String) -> URL {
@@ -445,126 +611,180 @@ class DMGProcessor: ObservableObject {
         do {
             try FileManager.default.removeItem(at: url)
         } catch {
-            DiagnosticLogger.shared.log("Warning: Failed to clean up staged app: \(error)")
+            diagnostic("Warning: Failed to clean up staged app: \(error)")
         }
     }
 
     @discardableResult
-    private func trashDMGIfNeeded(at dmgPath: String, shouldTrash: Bool) -> Bool {
+    private func trashDMGIfNeeded(at dmgPath: String, shouldTrash: Bool, dmgName: String) -> Bool {
         guard shouldTrash else {
+            support(event: "trash_result", details: ["dmg": dmgName, "result": "kept"])
             return false
         }
 
         let dmgURL = URL(fileURLWithPath: dmgPath)
         do {
             try FileManager.default.trashItem(at: dmgURL, resultingItemURL: nil)
-            DiagnosticLogger.shared.log("Moved DMG to Trash: \(dmgPath)")
+            diagnostic("Moved DMG to Trash: \(dmgPath)")
+            support(event: "trash_result", details: ["dmg": dmgName, "result": "trashed"])
             return true
         } catch {
-            DiagnosticLogger.shared.log("Warning: Failed to move DMG to trash: \(error)")
+            diagnostic("Warning: Failed to move DMG to trash: \(error)")
+            support(
+                event: "trash_result",
+                details: errorDetails(error).merging([
+                    "dmg": dmgName,
+                    "result": "failed"
+                ]) { current, _ in current }
+            )
             return false
         }
     }
 
-    // Find .app files in a directory (root level only)
     private func findAppFiles(in mountPoint: String) -> [String] {
         let fileManager = FileManager.default
         var appFiles: [String] = []
 
         do {
             let contents = try fileManager.contentsOfDirectory(atPath: mountPoint)
-            DiagnosticLogger.shared.log("Mount point contents: \(contents)")
-            for item in contents {
-                if item.hasSuffix(".app") && !item.hasPrefix(".") {
-                    let fullPath = (mountPoint as NSString).appendingPathComponent(item)
-                    appFiles.append(fullPath)
-                }
+            diagnostic("Mount point contents: \(contents)")
+            for item in contents where item.hasSuffix(".app") && !item.hasPrefix(".") {
+                let fullPath = (mountPoint as NSString).appendingPathComponent(item)
+                appFiles.append(fullPath)
             }
         } catch {
-            DiagnosticLogger.shared.log("Error scanning mount point: \(error)")
+            diagnostic("Error scanning mount point: \(error)")
         }
 
-        DiagnosticLogger.shared.log("Found \(appFiles.count) .app file(s): \(appFiles)")
+        diagnostic("Found \(appFiles.count) .app file(s): \(appFiles)")
         return appFiles
     }
 
-    // Install an app to /Applications
-    private func installApp(from appPath: String, mountPoint: String, dmgPath: String) async {
-        let appName = (appPath as NSString).lastPathComponent
-        let destinationURL = URL(fileURLWithPath: "/Applications/\(appName)")
+    private func installApp(from appPath: String, mountPoint: String, dmgPath: String, dmgName: String) async {
+        let resolvedAppName = appName(from: appPath)
+        let destinationURL = URL(fileURLWithPath: "/Applications/\(resolvedAppName)")
         let destinationPath = destinationURL.path
-        let stagedURL = stagedAppURL(for: appName)
+        let stagedURL = stagedAppURL(for: resolvedAppName)
         var shouldReplaceExistingApp = false
 
-        // Validate /Applications folder first
-        if let errorMessage = validateApplicationsFolder() {
-            DiagnosticLogger.shared.log("Applications folder validation failed: \(errorMessage)")
-            await handleError(errorMessage)
-            await unmountDMG(at: mountPoint)
+        if let issue = validateApplicationsFolder() {
+            diagnostic("Applications folder validation failed: \(issue.message)")
+            support(
+                event: "install_result",
+                details: [
+                    "app": resolvedAppName,
+                    "dmg": dmgName,
+                    "reason": issue.rawValue,
+                    "result": "failed"
+                ]
+            )
+            recordCompletion(
+                dmgName: dmgName,
+                outcome: "error",
+                details: ["app": resolvedAppName, "reason": issue.rawValue]
+            )
+            await handleError(issue.message)
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
             return
         }
 
-        // Check if app already exists
         if FileManager.default.fileExists(atPath: destinationPath) {
-            DiagnosticLogger.shared.log("Destination app already exists: \(destinationPath)")
-            // Show Skip/Replace dialog
-            let shouldReplace = await showSkipReplaceDialog(appName: appName)
+            diagnostic("Destination app already exists: \(destinationPath)")
+            support(event: "destination_exists", details: ["app": resolvedAppName, "dmg": dmgName])
+            let shouldReplace = await showSkipReplaceDialog(appName: resolvedAppName)
 
             if !shouldReplace {
-                // User chose to skip
-                DiagnosticLogger.shared.log("Installation skipped by user")
+                diagnostic("Installation skipped by user")
+                support(
+                    event: "install_decision",
+                    details: ["action": "skip", "app": resolvedAppName, "dmg": dmgName]
+                )
                 let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
+                    dmgName: dmgName,
                     shouldTrashDMG: UserPreferences.shared.autoTrashDMG
                 )
 
                 if currentFeedbackMode == .notification && didTrashDMG {
                     await sendNotification(
                         title: "EasyDMG",
-                        message: "\(appName) was skipped; disk image moved to Trash"
+                        message: "\(resolvedAppName) was skipped; disk image moved to Trash"
                     )
                 }
 
                 ProgressWindowController.shared.hide()
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "skipped",
+                    details: [
+                        "app": resolvedAppName,
+                        "trashed_dmg": boolString(didTrashDMG)
+                    ]
+                )
                 return
             }
 
             shouldReplaceExistingApp = true
-            DiagnosticLogger.shared.log("User chose to replace existing app")
+            diagnostic("User chose to replace existing app")
+            support(
+                event: "install_decision",
+                details: ["action": "replace", "app": resolvedAppName, "dmg": dmgName]
+            )
 
-            // User chose to replace - show progress if in progress bar mode
             if currentFeedbackMode == .progressBar {
                 ProgressWindowController.shared.show(message: "Preparing replacement...", progress: 0.2)
             }
         }
 
-        // Check disk space before copying
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
-        DiagnosticLogger.shared.log("Calculated app size: \(appSize) bytes for \(appPath)")
+        diagnostic("Calculated app size: \(appSize) bytes for \(appPath)")
         if !hasEnoughDiskSpace(requiredBytes: appSize) {
             let sizeInGB = Double(appSize) / (1024 * 1024 * 1024)
-            DiagnosticLogger.shared.log("Insufficient disk space for app size \(appSize)")
+            diagnostic("Insufficient disk space for app size \(appSize)")
+            support(
+                event: "install_result",
+                details: [
+                    "app": resolvedAppName,
+                    "dmg": dmgName,
+                    "reason": "insufficient_disk_space",
+                    "required_bytes": String(appSize),
+                    "result": "failed"
+                ]
+            )
+            recordCompletion(
+                dmgName: dmgName,
+                outcome: "error",
+                details: ["app": resolvedAppName, "reason": "insufficient_disk_space"]
+            )
             await handleError("Insufficient disk space (need \(String(format: "%.1f", sizeInGB))GB)")
-            await unmountDMG(at: mountPoint)
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
             return
         }
 
         cleanupStagedAppIfNeeded(at: stagedURL)
+        support(
+            event: "install_start",
+            details: [
+                "app": resolvedAppName,
+                "dmg": dmgName,
+                "replace_existing": boolString(shouldReplaceExistingApp),
+                "volume": volumeName(from: mountPoint)
+            ]
+        )
 
-        // Copy app to /Applications staging location (Step 2: 20% → 40%)
         do {
             try await withMagicFallback(
                 message: "Installing to Applications...",
                 progress: 0.2
             ) {
-                DiagnosticLogger.shared.log("Copying app from \(appPath) to staging path \(stagedURL.path)")
+                DiagnosticLogger.shared.diagnostic(
+                    "Copying app from \(appPath) to staging path \(stagedURL.path)"
+                )
                 try FileManager.default.copyItem(atPath: appPath, toPath: stagedURL.path)
             }
 
-            // Remove quarantine attributes to prevent false "needs update" states
-            // This replicates the behavior of manual Finder drag-and-drop installation
             await removeQuarantineAttributes(from: stagedURL.path)
 
             if shouldReplaceExistingApp && FileManager.default.fileExists(atPath: destinationPath) {
@@ -579,21 +799,43 @@ class DMGProcessor: ObservableObject {
                 try FileManager.default.moveItem(at: stagedURL, to: destinationURL)
             }
             let destinationExists = FileManager.default.fileExists(atPath: destinationPath)
-            DiagnosticLogger.shared.log("Installed app at destination: \(destinationPath); existsAfterMove=\(destinationExists)")
+            diagnostic("Installed app at destination: \(destinationPath); existsAfterMove=\(destinationExists)")
+            support(
+                event: "install_result",
+                details: [
+                    "app": resolvedAppName,
+                    "destination_exists": boolString(destinationExists),
+                    "dmg": dmgName,
+                    "replace_existing": boolString(shouldReplaceExistingApp),
+                    "result": "success"
+                ]
+            )
 
-            // Send notification if in notification mode
             if currentFeedbackMode == .notification {
-                await sendNotification(title: "EasyDMG", message: "\(appName) installed successfully")
+                await sendNotification(title: "EasyDMG", message: "\(resolvedAppName) installed successfully")
             }
         } catch {
-            DiagnosticLogger.shared.log("Installation failed while copying/replacing: \(error)")
+            diagnostic("Installation failed while copying/replacing: \(error)")
             cleanupStagedAppIfNeeded(at: stagedURL)
+            support(
+                event: "install_result",
+                details: errorDetails(error).merging([
+                    "app": resolvedAppName,
+                    "dmg": dmgName,
+                    "reason": "copy_or_replace_failed",
+                    "result": "failed"
+                ]) { current, _ in current }
+            )
+            recordCompletion(
+                dmgName: dmgName,
+                outcome: "error",
+                details: ["app": resolvedAppName, "reason": "copy_or_replace_failed"]
+            )
             await handleError("Installation failed")
-            await unmountDMG(at: mountPoint, progress: 0.6)
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.6)
             return
         }
 
-        // Reveal in Finder (Step 3: 40% → 60%)
         if UserPreferences.shared.revealInFinder {
             showProgress("Opening in Finder...", progress: 0.4)
             revealInFinder(path: destinationPath)
@@ -601,30 +843,34 @@ class DMGProcessor: ObservableObject {
             showProgress("Finalizing installation...", progress: 0.4)
         }
 
-        // Unmount DMG (Step 4: 60% → 80%)
-        await unmountDMG(at: mountPoint, progress: 0.6)
+        _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.6)
 
-        // Move to Trash (Step 5: 80% → 100%)
+        let didTrashDMG: Bool
         if UserPreferences.shared.autoTrashDMG {
             showProgress("Moving disk image to trash...", progress: 0.8)
-            trashDMGIfNeeded(at: dmgPath, shouldTrash: true)
+            didTrashDMG = trashDMGIfNeeded(at: dmgPath, shouldTrash: true, dmgName: dmgName)
         } else {
             showProgress("Keeping disk image...", progress: 0.8)
+            didTrashDMG = trashDMGIfNeeded(at: dmgPath, shouldTrash: false, dmgName: dmgName)
         }
 
-        // Handle completion based on feedback mode
         if currentFeedbackMode == .progressBar {
-            // Show completion message briefly in progress bar mode
             showProgress("Installation complete!", progress: 1.0)
-            try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
 
-        // Hide the progress window (only visible in progress bar mode)
         ProgressWindowController.shared.hide()
-        DiagnosticLogger.shared.log("✅ Processing complete for \(appName)")
+        diagnostic("✅ Processing complete for \(resolvedAppName)")
+        recordCompletion(
+            dmgName: dmgName,
+            outcome: "installed",
+            details: [
+                "app": resolvedAppName,
+                "trashed_dmg": boolString(didTrashDMG)
+            ]
+        )
     }
 
-    // Show Skip/Replace dialog
     private func showSkipReplaceDialog(appName: String) async -> Bool {
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
@@ -633,7 +879,6 @@ class DMGProcessor: ObservableObject {
                 alert.messageText = "EasyDMG"
                 alert.informativeText = "\(appName) already exists in Applications.\n\nWhat would you like to do?"
 
-                // Try to use EasyDMG icon
                 if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
                    let icon = NSImage(contentsOfFile: iconPath) {
                     alert.icon = icon
@@ -648,26 +893,41 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    // Unmount DMG
-    private func unmountDMG(at mountPoint: String, progress: Double? = nil) async {
-        DiagnosticLogger.shared.log("Unmounting \(mountPoint)...")
+    private func unmountDMG(at mountPoint: String, dmgName: String, progress: Double? = nil) async -> UnmountResult {
+        diagnostic("Unmounting \(mountPoint)...")
+        support(
+            event: "unmount_start",
+            details: [
+                "dmg": dmgName,
+                "volume": volumeName(from: mountPoint)
+            ]
+        )
 
-        // If progress is provided, use magic fallback wrapper
-        if let progress = progress {
-            await withMagicFallback(
+        let result: UnmountResult
+        if let progress {
+            result = await withMagicFallback(
                 message: "Cleaning up...",
                 progress: progress
             ) {
                 self.performUnmount(at: mountPoint)
             }
         } else {
-            // No progress tracking needed (error recovery paths)
-            performUnmount(at: mountPoint)
+            result = performUnmount(at: mountPoint)
         }
+
+        var details = [
+            "dmg": dmgName,
+            "result": result.supportValue,
+            "volume": volumeName(from: mountPoint)
+        ]
+        if let exitStatus = result.exitStatus {
+            details["exit_status"] = String(exitStatus)
+        }
+        support(event: "unmount_result", details: details)
+        return result
     }
 
-    // Synchronous unmount helper (called from withMagicFallback or directly)
-    private nonisolated func performUnmount(at mountPoint: String) {
+    private nonisolated func performUnmount(at mountPoint: String) -> UnmountResult {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
         task.arguments = ["detach", mountPoint]
@@ -680,20 +940,18 @@ class DMGProcessor: ObservableObject {
             task.waitUntilExit()
 
             if task.terminationStatus == 0 {
-                DiagnosticLogger.shared.log("✓ Clean detach succeeded")
-                return
+                DiagnosticLogger.shared.diagnostic("✓ Clean detach succeeded")
+                return .clean
             }
 
-            // Read error output
             let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
             let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-            DiagnosticLogger.shared.log(
+            DiagnosticLogger.shared.diagnostic(
                 "Detach failed: \(DiagnosticLogger.compact(errorOutput))"
             )
 
-            // Check for "resource busy" and retry once
             if errorOutput.lowercased().contains("resource busy") {
-                DiagnosticLogger.shared.log("Resource busy, waiting 250ms and retrying...")
+                DiagnosticLogger.shared.diagnostic("Resource busy, waiting 250ms and retrying...")
                 Thread.sleep(forTimeInterval: 0.25)
 
                 let retryTask = Process()
@@ -703,27 +961,39 @@ class DMGProcessor: ObservableObject {
                 retryTask.waitUntilExit()
 
                 if retryTask.terminationStatus == 0 {
-                    DiagnosticLogger.shared.log("✓ Retry detach succeeded")
-                    return
+                    DiagnosticLogger.shared.diagnostic("✓ Retry detach succeeded")
+                    return .retrySuccess
                 }
             }
 
-            // Force detach as last resort
-            DiagnosticLogger.shared.log("Using force detach...")
+            DiagnosticLogger.shared.diagnostic("Using force detach...")
             let forceTask = Process()
             forceTask.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
             forceTask.arguments = ["detach", mountPoint, "-force"]
             try? forceTask.run()
             forceTask.waitUntilExit()
-            DiagnosticLogger.shared.log("✓ Force detach completed with status \(forceTask.terminationStatus)")
+            if forceTask.terminationStatus == 0 {
+                DiagnosticLogger.shared.diagnostic("✓ Force detach completed with status 0")
+                return .forceSuccess
+            }
+
+            DiagnosticLogger.shared.diagnostic(
+                "Force detach failed with status \(forceTask.terminationStatus)"
+            )
+            return .failed(exitStatus: forceTask.terminationStatus)
         } catch {
-            DiagnosticLogger.shared.log("Error unmounting DMG: \(error)")
+            DiagnosticLogger.shared.diagnostic("Error unmounting DMG: \(error)")
+            return .failed(exitStatus: nil)
         }
     }
 
-    // Unmount and cleanup (optionally move DMG to trash)
-    private func unmountAndCleanup(mountPoint: String, dmgPath: String, shouldTrashDMG: Bool) async -> Bool {
-        await unmountDMG(at: mountPoint)
+    private func unmountAndCleanup(
+        mountPoint: String,
+        dmgPath: String,
+        dmgName: String,
+        shouldTrashDMG: Bool
+    ) async -> Bool {
+        _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
 
         if shouldTrashDMG {
             showProgress("Moving disk image to trash...", progress: 0.8)
@@ -731,14 +1001,13 @@ class DMGProcessor: ObservableObject {
             showProgress("Keeping disk image...", progress: 0.8)
         }
 
-        return trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG)
+        return trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG, dmgName: dmgName)
     }
 
-    // Remove quarantine attributes from installed app
     // This prevents apps with auto-update mechanisms from incorrectly detecting
-    // "needs update" states that can cause unwanted behavior
+    // "needs update" states that can cause unwanted behavior.
     private func removeQuarantineAttributes(from path: String) async {
-        DiagnosticLogger.shared.log("Removing quarantine attributes from \(path)...")
+        diagnostic("Removing quarantine attributes from \(path)...")
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
@@ -752,62 +1021,99 @@ class DMGProcessor: ObservableObject {
             task.waitUntilExit()
 
             if task.terminationStatus == 0 {
-                DiagnosticLogger.shared.log("✓ Quarantine attributes removed")
+                diagnostic("✓ Quarantine attributes removed")
             } else {
-                // Read error but don't fail - this is non-critical
                 let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-                DiagnosticLogger.shared.log(
+                diagnostic(
                     "Note: Could not remove quarantine attributes: \(DiagnosticLogger.compact(errorOutput))"
                 )
             }
         } catch {
-            // Non-fatal error - log and continue
-            DiagnosticLogger.shared.log("Note: xattr command failed: \(error)")
+            diagnostic("Note: xattr command failed: \(error)")
         }
     }
 
-    // Open for manual installation (mount point)
-    private func openForManualInstallation(mountPoint: String, reason: String) async {
-        DiagnosticLogger.shared.log("Manual fallback opening mount point: \(mountPoint); reason=\(reason)")
+    private func openForManualInstallation(
+        mountPoint: String,
+        dmgName: String,
+        reason: ManualFallbackReason,
+        details: [String: String] = [:]
+    ) async {
+        var mergedDetails = details
+        mergedDetails["dmg"] = dmgName
+        mergedDetails["reason"] = reason.rawValue
+        mergedDetails["target"] = "mounted_volume"
+        mergedDetails["volume"] = volumeName(from: mountPoint)
+        support(event: "manual_fallback", details: mergedDetails)
+
+        diagnostic("Manual fallback opening mount point: \(mountPoint); reason=\(reason.rawValue)")
         NSWorkspace.shared.open(URL(fileURLWithPath: mountPoint))
         ProgressWindowController.shared.hide()
 
-        DiagnosticLogger.shared.log("✅ Opened mounted volume for manual installation")
+        diagnostic("✅ Opened mounted volume for manual installation")
+        recordCompletion(
+            dmgName: dmgName,
+            outcome: "manual_fallback",
+            details: ["reason": reason.rawValue]
+        )
     }
 
-    // Open for manual installation (DMG path)
-    private func openForManualInstallation(dmgPath: String, reason: String) async {
-        DiagnosticLogger.shared.log("Manual fallback opening DMG path: \(dmgPath); reason=\(reason)")
+    private func openForManualInstallation(
+        dmgPath: String,
+        dmgName: String,
+        reason: ManualFallbackReason,
+        details: [String: String] = [:]
+    ) async {
+        var mergedDetails = details
+        mergedDetails["dmg"] = dmgName
+        mergedDetails["reason"] = reason.rawValue
+        mergedDetails["target"] = "dmg"
+        support(event: "manual_fallback", details: mergedDetails)
+
+        diagnostic("Manual fallback opening DMG path: \(dmgPath); reason=\(reason.rawValue)")
         let dmgURL = URL(fileURLWithPath: dmgPath)
         let mounterURL = URL(fileURLWithPath: "/System/Library/CoreServices/DiskImageMounter.app")
         let configuration = NSWorkspace.OpenConfiguration()
 
         NSWorkspace.shared.open([dmgURL], withApplicationAt: mounterURL, configuration: configuration) { _, error in
             if let error {
-                DiagnosticLogger.shared.log("❌ Failed to open DMG in DiskImageMounter (\(reason)): \(error)")
+                DiagnosticLogger.shared.diagnostic(
+                    "❌ Failed to open DMG in DiskImageMounter (\(reason.rawValue)): \(error)"
+                )
+                DiagnosticLogger.shared.support(
+                    event: "manual_fallback_open_error",
+                    details: [
+                        "dmg": dmgName,
+                        "error_domain": (error as NSError).domain,
+                        "error_code": String((error as NSError).code),
+                        "reason": reason.rawValue
+                    ]
+                )
             }
         }
         ProgressWindowController.shared.hide()
 
-        DiagnosticLogger.shared.log("✅ Opened DMG in DiskImageMounter for manual installation: \(reason)")
+        diagnostic("✅ Opened DMG in DiskImageMounter for manual installation: \(reason.rawValue)")
+        recordCompletion(
+            dmgName: dmgName,
+            outcome: "manual_fallback",
+            details: ["reason": reason.rawValue]
+        )
     }
 
-    // Reveal app in Finder
     private func revealInFinder(path: String) {
-        DiagnosticLogger.shared.log("Revealing app in Finder: \(path)")
+        diagnostic("Revealing app in Finder: \(path)")
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "/Applications")
     }
 
-    // Handle errors
     private func handleError(_ message: String) async {
-        DiagnosticLogger.shared.log("Error: \(message)")
+        diagnostic("Error: \(message)")
         showProgress("Error: \(message)", progress: 0.0)
 
-        // Keep error visible for 3 seconds
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         ProgressWindowController.shared.hide()
 
-        DiagnosticLogger.shared.log("✅ Error handled, continuing queue if needed")
+        diagnostic("✅ Error handled, continuing queue if needed")
     }
 }

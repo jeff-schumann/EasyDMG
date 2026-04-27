@@ -2,41 +2,50 @@
 //  DiagnosticLogger.swift
 //  EasyDMG
 //
-//  Lightweight file-backed diagnostics for debugging launch and DMG handling.
+//  File-backed support and diagnostic logging for launch and DMG handling.
 //
 
 import Foundation
 
 final class DiagnosticLogger: @unchecked Sendable {
+    private struct LogTarget: Sendable {
+        let url: URL
+        let archivedURL: URL
+        let maxBytes: UInt64
+    }
+
     nonisolated static let shared = DiagnosticLogger()
 
     private static let environmentKey = "EASYDMG_DIAGNOSTIC_LOGGING"
     private static let defaultsKey = "diagnosticLoggingEnabled"
 
     private let lock = NSLock()
-    private let enabled: Bool
-    private let logURL: URL?
-    private let timestampFormatter: DateFormatter
+    private let sessionID = UUID().uuidString.lowercased()
+    private let supportTarget: LogTarget?
+    private let diagnosticTarget: LogTarget?
+    private let diagnosticEnabled: Bool
 
     nonisolated var isEnabled: Bool {
-        enabled
+        diagnosticEnabled
     }
 
-    nonisolated var logFilePath: String? {
-        logURL?.path
+    nonisolated var isDiagnosticEnabled: Bool {
+        diagnosticEnabled
+    }
+
+    nonisolated var supportLogFilePath: String? {
+        supportTarget?.url.path
+    }
+
+    nonisolated var diagnosticLogFilePath: String? {
+        diagnosticTarget?.url.path
     }
 
     private init() {
         let environment = ProcessInfo.processInfo.environment[Self.environmentKey]
         let enabledByEnvironment = Self.isEnabledValue(environment)
         let enabledByDefaults = UserDefaults.standard.bool(forKey: Self.defaultsKey)
-        self.enabled = enabledByEnvironment || enabledByDefaults
-        self.timestampFormatter = Self.makeTimestampFormatter()
-
-        guard enabled else {
-            self.logURL = nil
-            return
-        }
+        diagnosticEnabled = enabledByEnvironment || enabledByDefaults
 
         let logsDirectory = FileManager.default
             .urls(for: .libraryDirectory, in: .userDomainMask)[0]
@@ -48,66 +57,82 @@ final class DiagnosticLogger: @unchecked Sendable {
                 at: logsDirectory,
                 withIntermediateDirectories: true
             )
-            self.logURL = logsDirectory.appendingPathComponent("diagnostic.log")
+
+            supportTarget = LogTarget(
+                url: logsDirectory.appendingPathComponent("support.log"),
+                archivedURL: logsDirectory.appendingPathComponent("support.previous.log"),
+                maxBytes: 256 * 1024
+            )
+
+            if diagnosticEnabled {
+                diagnosticTarget = LogTarget(
+                    url: logsDirectory.appendingPathComponent("diagnostic.log"),
+                    archivedURL: logsDirectory.appendingPathComponent("diagnostic.previous.log"),
+                    maxBytes: 512 * 1024
+                )
+            } else {
+                diagnosticTarget = nil
+            }
         } catch {
-            self.logURL = nil
-            print("EasyDMG diagnostics unavailable: \(error)")
+            supportTarget = nil
+            diagnosticTarget = nil
+            #if DEBUG
+            print("EasyDMG logging unavailable: \(error)")
+            #endif
         }
     }
 
     nonisolated func startSession() {
-        guard enabled else {
-            return
-        }
-
         let bundle = Bundle.main
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let bundleID = bundle.bundleIdentifier ?? "unknown"
-        let executable = bundle.executablePath ?? "unknown"
 
-        write("")
-        write("=== EasyDMG diagnostic session started ===")
-        write("bundleID=\(bundleID) version=\(version) build=\(build)")
-        write("bundlePath=\(bundle.bundlePath)")
-        write("executablePath=\(executable)")
-        write("processID=\(ProcessInfo.processInfo.processIdentifier)")
-        write("timeZone=\(Self.timeZoneDescription())")
-        write("logPath=\(logFilePath ?? "unavailable")")
-    }
+        support(
+            event: "session_start",
+            details: [
+                "bundle_id": bundleID,
+                "diagnostic_logging": diagnosticEnabled ? "enabled" : "disabled",
+                "build": build,
+                "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
+                "version": version
+            ]
+        )
 
-    nonisolated func log(_ message: @autoclosure () -> String) {
-        let rendered = message()
-        print(rendered)
-        write(rendered)
-    }
-
-    nonisolated func write(_ message: @autoclosure () -> String) {
-        guard enabled, let logURL else {
+        guard diagnosticEnabled else {
             return
         }
 
-        lock.lock()
-        defer { lock.unlock() }
+        diagnostic("")
+        diagnostic("=== EasyDMG diagnostic session started ===")
+        diagnostic("sessionID=\(sessionID)")
+        diagnostic("bundleID=\(bundleID) version=\(version) build=\(build)")
+        diagnostic("bundlePath=\(bundle.bundlePath)")
+        diagnostic("executablePath=\(bundle.executablePath ?? "unknown")")
+        diagnostic("processID=\(ProcessInfo.processInfo.processIdentifier)")
+        diagnostic("supportLogPath=\(supportLogFilePath ?? "unavailable")")
+        diagnostic("diagnosticLogPath=\(diagnosticLogFilePath ?? "unavailable")")
+    }
 
-        rotateIfNeeded(at: logURL)
-
-        let timestamp = timestampFormatter.string(from: Date())
-        let line = "[\(timestamp)] \(message())\n"
-        let data = Data(line.utf8)
-
-        do {
-            if FileManager.default.fileExists(atPath: logURL.path) {
-                let handle = try FileHandle(forWritingTo: logURL)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-            } else {
-                try data.write(to: logURL, options: .atomic)
-            }
-        } catch {
-            print("EasyDMG diagnostics write failed: \(error)")
+    nonisolated func support(event: String, details: [String: String] = [:]) {
+        guard let supportTarget else {
+            return
         }
+
+        let renderedLine = renderSupportLine(event: event, details: details)
+        append(line: renderedLine, to: supportTarget)
+    }
+
+    nonisolated func diagnostic(_ message: @autoclosure () -> String) {
+        guard let diagnosticTarget else {
+            return
+        }
+
+        let rendered = message()
+        #if DEBUG
+        print(rendered)
+        #endif
+        append(line: "[\(timestamp())] \(rendered)\n", to: diagnosticTarget)
     }
 
     nonisolated static func compact(_ value: String, maxLength: Int = 2_000) -> String {
@@ -136,39 +161,72 @@ final class DiagnosticLogger: @unchecked Sendable {
         }
     }
 
-    nonisolated private static func makeTimestampFormatter() -> DateFormatter {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .autoupdatingCurrent
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS ZZZZZ"
-        return formatter
-    }
+    nonisolated private func renderSupportLine(event: String, details: [String: String]) -> String {
+        var components = [
+            "time=\(timestamp())",
+            "session_id=\(escapeSupportValue(sessionID))",
+            "event=\(escapeSupportValue(event))"
+        ]
 
-    nonisolated private static func timeZoneDescription(for date: Date = Date()) -> String {
-        let timeZone = TimeZone.autoupdatingCurrent
-        let secondsFromGMT = timeZone.secondsFromGMT(for: date)
-        let hours = secondsFromGMT / 3600
-        let minutes = abs(secondsFromGMT / 60) % 60
-        let offset = String(format: "%+.2d:%02d", hours, minutes)
-
-        if let abbreviation = timeZone.abbreviation(for: date) {
-            return "\(timeZone.identifier) \(abbreviation) \(offset)"
+        for key in details.keys.sorted() {
+            guard let value = details[key], !value.isEmpty else {
+                continue
+            }
+            components.append("\(key)=\(escapeSupportValue(value))")
         }
 
-        return "\(timeZone.identifier) \(offset)"
+        return components.joined(separator: " ") + "\n"
     }
 
-    nonisolated private func rotateIfNeeded(at logURL: URL) {
+    nonisolated private func escapeSupportValue(_ value: String) -> String {
+        guard value.rangeOfCharacter(from: CharacterSet(charactersIn: " =\"")) != nil else {
+            return value
+        }
+
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+
+    nonisolated private func timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
+    }
+
+    nonisolated private func append(line: String, to target: LogTarget) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        rotateIfNeeded(target)
+
+        let data = Data(line.utf8)
+
+        do {
+            if FileManager.default.fileExists(atPath: target.url.path) {
+                let handle = try FileHandle(forWritingTo: target.url)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } else {
+                try data.write(to: target.url, options: .atomic)
+            }
+        } catch {
+            #if DEBUG
+            print("EasyDMG logging write failed: \(error)")
+            #endif
+        }
+    }
+
+    nonisolated private func rotateIfNeeded(_ target: LogTarget) {
         guard
-            let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
+            let attributes = try? FileManager.default.attributesOfItem(atPath: target.url.path),
             let size = attributes[.size] as? NSNumber,
-            size.uint64Value > 512 * 1024
+            size.uint64Value > target.maxBytes
         else {
             return
         }
 
-        let archivedURL = logURL.deletingLastPathComponent().appendingPathComponent("diagnostic.previous.log")
-        try? FileManager.default.removeItem(at: archivedURL)
-        try? FileManager.default.moveItem(at: logURL, to: archivedURL)
+        try? FileManager.default.removeItem(at: target.archivedURL)
+        try? FileManager.default.moveItem(at: target.url, to: target.archivedURL)
     }
 }

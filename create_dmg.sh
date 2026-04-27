@@ -7,7 +7,7 @@ set -e
 
 # Configuration
 APP_NAME="${APP_NAME:-EasyDMG}"
-VERSION="${VERSION:-1.1.0}"
+VERSION="${VERSION:-1.1.1}"
 BUILD_DIR="${BUILD_DIR:-$HOME/Library/Developer/Xcode/DerivedData/EasyDMG-dibggcaewvrasrcrtvhemiwxucou/Build/Products/Release}"
 DMG_NAME="${DMG_NAME:-${APP_NAME}_v${VERSION}}"
 TEMP_DIR="${TEMP_DIR:-/tmp/${APP_NAME}_dmg}"
