@@ -15,6 +15,9 @@ import UserNotifications
 class DMGProcessor: ObservableObject {
     private enum ManualFallbackReason: String, Sendable {
         case genericMountFailure = "generic_mount_failure"
+        case invalidAppBundle = "invalid_app_bundle"
+        case packageInstaller = "package_installer"
+        case installerOrAuxiliaryApp = "installer_or_auxiliary_app"
         case passwordProtected = "password_protected"
         case noAppFound = "no_app_found"
         case multipleAppsFound = "multiple_apps_found"
@@ -71,6 +74,14 @@ class DMGProcessor: ObservableObject {
                 return "/Applications folder is not writable"
             }
         }
+    }
+
+    private enum AppBundleValidationIssue: String {
+        case missingInfoPlist = "missing_info_plist"
+        case unreadableInfoPlist = "unreadable_info_plist"
+        case notApplicationBundle = "not_application_bundle"
+        case missingExecutableName = "missing_executable_name"
+        case missingExecutableFile = "missing_executable_file"
     }
 
     @Published var isProcessing = false
@@ -364,13 +375,27 @@ class DMGProcessor: ObservableObject {
 
         showProgress("Scanning for apps...", progress: 0.2)
         let appFiles = findAppFiles(in: mountPoint)
+        let packageFiles = findPackageFiles(in: mountPoint)
+
+        if !packageFiles.isEmpty {
+            let packageNames = appNames(from: packageFiles)
+            diagnostic("Manual fallback: package installer(s) found: \(packageNames)")
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                dmgName: currentDMGName,
+                reason: .packageInstaller,
+                details: [
+                    "app_count": String(appFiles.count),
+                    "package_count": String(packageFiles.count),
+                    "package_names": joinedNames(packageNames),
+                    "volume": volumeName(from: mountPoint)
+                ]
+            )
+            return
+        }
 
         let mainApps = appFiles.filter { path in
-            let name = appName(from: path).lowercased()
-            return !name.contains("uninstall") &&
-                   !name.contains("installer") &&
-                   !name.contains("helper") &&
-                   !name.contains("readme")
+            !isInstallerLikeApp(at: path)
         }
 
         let finalAppFiles = mainApps.count == 1 ? mainApps : appFiles
@@ -381,6 +406,7 @@ class DMGProcessor: ObservableObject {
                 "app_count": String(finalAppFiles.count),
                 "app_names": joinedNames(finalAppNames),
                 "dmg": currentDMGName,
+                "package_count": String(packageFiles.count),
                 "raw_app_count": String(appFiles.count),
                 "volume": volumeName(from: mountPoint)
             ]
@@ -402,6 +428,39 @@ class DMGProcessor: ObservableObject {
 
         case 1:
             let appPath = finalAppFiles[0]
+            if isInstallerLikeApp(at: appPath) {
+                let candidateName = appName(from: appPath)
+                diagnostic("Manual fallback: single app looks like an installer or auxiliary app: \(candidateName)")
+                await openForManualInstallation(
+                    mountPoint: mountPoint,
+                    dmgName: currentDMGName,
+                    reason: .installerOrAuxiliaryApp,
+                    details: [
+                        "app": candidateName,
+                        "app_count": "1",
+                        "volume": volumeName(from: mountPoint)
+                    ]
+                )
+                return
+            }
+
+            if let issue = appBundleValidationIssue(for: appPath) {
+                let candidateName = appName(from: appPath)
+                diagnostic("Manual fallback: invalid app bundle (\(issue.rawValue)): \(candidateName)")
+                await openForManualInstallation(
+                    mountPoint: mountPoint,
+                    dmgName: currentDMGName,
+                    reason: .invalidAppBundle,
+                    details: [
+                        "app": candidateName,
+                        "app_count": "1",
+                        "validation_issue": issue.rawValue,
+                        "volume": volumeName(from: mountPoint)
+                    ]
+                )
+                return
+            }
+
             diagnostic("Installing: \(appName(from: appPath)) from \(appPath)")
             await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path, dmgName: currentDMGName)
 
@@ -648,7 +707,7 @@ class DMGProcessor: ObservableObject {
         do {
             let contents = try fileManager.contentsOfDirectory(atPath: mountPoint)
             diagnostic("Mount point contents: \(contents)")
-            for item in contents where item.hasSuffix(".app") && !item.hasPrefix(".") {
+            for item in contents where (item as NSString).pathExtension.lowercased() == "app" && !item.hasPrefix(".") {
                 let fullPath = (mountPoint as NSString).appendingPathComponent(item)
                 appFiles.append(fullPath)
             }
@@ -658,6 +717,81 @@ class DMGProcessor: ObservableObject {
 
         diagnostic("Found \(appFiles.count) .app file(s): \(appFiles)")
         return appFiles
+    }
+
+    private func findPackageFiles(in mountPoint: String) -> [String] {
+        let fileManager = FileManager.default
+        var packageFiles: [String] = []
+
+        do {
+            let contents = try fileManager.contentsOfDirectory(atPath: mountPoint)
+            for item in contents where !item.hasPrefix(".") {
+                let pathExtension = (item as NSString).pathExtension.lowercased()
+                if pathExtension == "pkg" || pathExtension == "mpkg" {
+                    let fullPath = (mountPoint as NSString).appendingPathComponent(item)
+                    packageFiles.append(fullPath)
+                }
+            }
+        } catch {
+            diagnostic("Error scanning mount point for packages: \(error)")
+        }
+
+        diagnostic("Found \(packageFiles.count) package installer file(s): \(packageFiles)")
+        return packageFiles
+    }
+
+    private func isInstallerLikeApp(at path: String) -> Bool {
+        let appName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        let words = Set(
+            appName
+                .lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+        )
+
+        return words.contains("install") ||
+            words.contains("installer") ||
+            words.contains("setup") ||
+            words.contains("uninstall") ||
+            words.contains("uninstaller") ||
+            words.contains("helper") ||
+            words.contains("readme") ||
+            (words.contains("read") && words.contains("me"))
+    }
+
+    private func appBundleValidationIssue(for path: String) -> AppBundleValidationIssue? {
+        let appURL = URL(fileURLWithPath: path)
+        let infoPlistURL = appURL.appendingPathComponent("Contents/Info.plist")
+
+        guard FileManager.default.fileExists(atPath: infoPlistURL.path) else {
+            return .missingInfoPlist
+        }
+
+        guard let data = try? Data(contentsOf: infoPlistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let info = plist as? [String: Any] else {
+            return .unreadableInfoPlist
+        }
+
+        guard info["CFBundlePackageType"] as? String == "APPL" else {
+            return .notApplicationBundle
+        }
+
+        guard let executableName = info["CFBundleExecutable"] as? String,
+              !executableName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .missingExecutableName
+        }
+
+        let executableURL = appURL
+            .appendingPathComponent("Contents/MacOS")
+            .appendingPathComponent(executableName)
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: executableURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return .missingExecutableFile
+        }
+
+        return nil
     }
 
     private func installApp(from appPath: String, mountPoint: String, dmgPath: String, dmgName: String) async {
