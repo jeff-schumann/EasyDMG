@@ -24,7 +24,7 @@ enum NotificationPermissionState: String, Equatable {
         case .denied:
             self = .off
         case .authorized, .provisional:
-            self = settings.alertSetting == .enabled ? .on : .limited
+            self = settings.canShowVisibleAlerts ? .on : .limited
         @unknown default:
             self = .off
         }
@@ -32,6 +32,59 @@ enum NotificationPermissionState: String, Equatable {
 
     var canUseNotificationFeedback: Bool {
         self == .on
+    }
+}
+
+extension UNNotificationSettings {
+    var canShowVisibleAlerts: Bool {
+        authorizationStatus == .authorized &&
+            alertSetting == .enabled &&
+            alertStyle != .none
+    }
+
+    var diagnosticDescription: String {
+        [
+            "authorization=\(authorizationStatus.diagnosticDescription)",
+            "alert=\(alertSetting.diagnosticDescription)",
+            "alertStyle=\(alertStyle.diagnosticDescription)",
+            "sound=\(soundSetting.diagnosticDescription)",
+            "notificationCenter=\(notificationCenterSetting.diagnosticDescription)"
+        ].joined(separator: " ")
+    }
+}
+
+private extension UNAuthorizationStatus {
+    var diagnosticDescription: String {
+        switch self {
+        case .notDetermined: return "notDetermined"
+        case .denied:        return "denied"
+        case .authorized:    return "authorized"
+        case .provisional:   return "provisional"
+        case .ephemeral:     return "ephemeral"
+        @unknown default:    return "unknown(\(rawValue))"
+        }
+    }
+}
+
+private extension UNNotificationSetting {
+    var diagnosticDescription: String {
+        switch self {
+        case .notSupported:  return "notSupported"
+        case .disabled:      return "disabled"
+        case .enabled:       return "enabled"
+        @unknown default:    return "unknown(\(rawValue))"
+        }
+    }
+}
+
+private extension UNAlertStyle {
+    var diagnosticDescription: String {
+        switch self {
+        case .none:          return "none"
+        case .banner:        return "banner"
+        case .alert:         return "alert"
+        @unknown default:    return "unknown(\(rawValue))"
+        }
     }
 }
 

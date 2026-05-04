@@ -255,6 +255,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         // Show notifications even when app is in foreground/active
-        completionHandler([.banner, .sound])
+        completionHandler([.banner, .list, .sound])
     }
 }

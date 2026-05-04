@@ -22,6 +22,27 @@ class DMGProcessor: ObservableObject {
         case noAppFound = "no_app_found"
         case multipleAppsFound = "multiple_apps_found"
         case licenseRequired = "license_required"
+
+        var notificationMessage: String {
+            switch self {
+            case .genericMountFailure:
+                return "EasyDMG could not mount this disk image automatically, so it opened the normal macOS installer."
+            case .invalidAppBundle:
+                return "The app bundle did not look installable, so EasyDMG opened the disk image for manual installation."
+            case .packageInstaller:
+                return "This disk image contains a package installer, so EasyDMG opened it for manual installation."
+            case .installerOrAuxiliaryApp:
+                return "The app looked like an installer or helper, so EasyDMG opened the disk image for manual installation."
+            case .passwordProtected:
+                return "This disk image is password-protected, so EasyDMG opened it for manual installation."
+            case .noAppFound:
+                return "EasyDMG did not find an installable app, so it opened the disk image for manual installation."
+            case .multipleAppsFound:
+                return "EasyDMG found multiple apps, so it opened the disk image for manual installation."
+            case .licenseRequired:
+                return "This disk image appears to require a license agreement, so EasyDMG opened it for manual installation."
+            }
+        }
     }
 
     private enum MountResult: Sendable {
@@ -216,17 +237,33 @@ class DMGProcessor: ObservableObject {
     }
 
     private func sendNotification(title: String, message: String) async {
+        let notificationCenter = UNUserNotificationCenter.current()
+        let settings = await notificationCenter.notificationSettings()
+        diagnostic("Notification settings before send: \(settings.diagnosticDescription)")
+        guard settings.canShowVisibleAlerts else {
+            diagnostic("Skipping notification because visible alerts are unavailable")
+            return
+        }
+
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = message
         content.sound = .default
 
-        // Use 1-second delay trigger to ensure notification delivers after app quits
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
+        let identifier = UUID().uuidString
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
 
         do {
-            try await UNUserNotificationCenter.current().add(request)
+            try await notificationCenter.add(request)
+            diagnostic("✅ Notification scheduled immediately: \(identifier)")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            let deliveredNotifications = await notificationCenter.deliveredNotifications()
+            if deliveredNotifications.contains(where: { $0.request.identifier == identifier }) {
+                diagnostic("✅ Notification delivered: \(identifier)")
+            } else {
+                diagnostic("ℹ️ Notification not listed as delivered yet: \(identifier)")
+            }
         } catch {
             diagnostic("❌ Notification error: \(error)")
         }
@@ -238,13 +275,26 @@ class DMGProcessor: ObservableObject {
         }
 
         let settings = await UNUserNotificationCenter.current().notificationSettings()
-        let permissionState = NotificationPermissionState(settings: settings)
-        guard permissionState.canUseNotificationFeedback else {
-            diagnostic("Failure notification unavailable: \(permissionState.rawValue)")
+        guard settings.canShowVisibleAlerts else {
+            diagnostic("Failure notification unavailable: \(settings.diagnosticDescription)")
             return
         }
 
         await sendNotification(title: "EasyDMG install failed", message: message)
+    }
+
+    private func sendManualFallbackNotificationIfAvailable(
+        dmgName: String,
+        reason: ManualFallbackReason
+    ) async {
+        guard UserPreferences.shared.feedbackMode != .silent else {
+            return
+        }
+
+        await sendNotification(
+            title: "EasyDMG needs manual install",
+            message: "\(dmgName): \(reason.notificationMessage)"
+        )
     }
 
     private func requestNotificationPermissionsIfNeeded() async {
@@ -261,9 +311,8 @@ class DMGProcessor: ObservableObject {
 
         if userMode == .notification {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
-            let permissionState = NotificationPermissionState(settings: settings)
-            if !permissionState.canUseNotificationFeedback {
-                diagnostic("Notification feedback unavailable, falling back to progress bar: \(permissionState.rawValue)")
+            if !settings.canShowVisibleAlerts {
+                diagnostic("Notification feedback unavailable, falling back to progress bar: \(settings.diagnosticDescription)")
                 return .progressBar
             }
         }
@@ -1224,6 +1273,7 @@ class DMGProcessor: ObservableObject {
             outcome: "manual_fallback",
             details: ["reason": reason.rawValue]
         )
+        await sendManualFallbackNotificationIfAvailable(dmgName: dmgName, reason: reason)
     }
 
     private func openForManualInstallation(
@@ -1267,6 +1317,7 @@ class DMGProcessor: ObservableObject {
             outcome: "manual_fallback",
             details: ["reason": reason.rawValue]
         )
+        await sendManualFallbackNotificationIfAvailable(dmgName: dmgName, reason: reason)
     }
 
     private func revealInFinder(path: String) {
