@@ -171,13 +171,18 @@ struct SetupTabView: View {
                     }
                 }
 
-                Rectangle()
-                    .fill(theme.border)
-                    .frame(height: 1)
+                HStack(spacing: 12) {
+                    Rectangle().fill(theme.border).frame(height: 1)
+                    Text("OR")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(theme.muted)
+                    Rectangle().fill(theme.border).frame(height: 1)
+                }
 
                 // Manual setup steps
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Manual Setup")
+                    Text("Alternative: Manual Setup")
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
 
@@ -201,9 +206,14 @@ struct SetupTabView: View {
                     .padding(.top, 8)
                 }
 
-                Rectangle()
-                    .fill(theme.border)
-                    .frame(height: 1)
+                HStack(spacing: 12) {
+                    Rectangle().fill(theme.border).frame(height: 1)
+                    Text("OR")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(theme.muted)
+                    Rectangle().fill(theme.border).frame(height: 1)
+                }
 
                 // Open With section
                 VStack(alignment: .leading, spacing: 14) {
@@ -215,6 +225,13 @@ struct SetupTabView: View {
                         .font(.system(size: 12.5))
                         .foregroundStyle(theme.muted)
                         .lineSpacing(2)
+
+                    // Held off on this for now — see if it belongs in About instead.
+                    // Text("Note: if you've already set EasyDMG as your default, you can use right click > 'Open With' and choose DiskImageMounter to use the regular Apple app.")
+                    //     .font(.system(size: 11.5))
+                    //     .foregroundStyle(theme.muted)
+                    //     .lineSpacing(2)
+                    //     .padding(.top, 4)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
