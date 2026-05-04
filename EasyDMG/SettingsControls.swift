@@ -133,13 +133,15 @@ private struct NavSegmentContent: View {
         let darkActiveFill = Color(hex: "1F140E")
         let darkOutline = SettingsPalette.sand.opacity(0.55)
         let fill: Color = isSelected
-            ? (colorScheme == .dark ? darkActiveFill : SettingsPalette.navy)
+            ? (colorScheme == .dark ? darkActiveFill : .white)
             : .clear
-        let stroke: Color = (isSelected && colorScheme == .dark) ? darkOutline : .clear
+        let stroke: Color = isSelected
+            ? (colorScheme == .dark ? darkOutline : SettingsPalette.navy)
+            : .clear
 
         return configuration.label
             .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(isSelected ? Color.white : muted)
+            .foregroundStyle(isSelected ? (colorScheme == .dark ? Color.white : SettingsPalette.navy) : muted)
             .padding(.vertical, 4)
             .padding(.horizontal, 12)
             .background(

@@ -87,7 +87,7 @@ struct SettingsTheme {
         muted:                 Color(hex: "7D6A58"),
         successGreen:          Color(hex: "2F7D32"),
         tabBarBackground:      Color(hex: "FDF8EC"),
-        tabTrack:              Color(hex: "E8E1D8"),
+        tabTrack:              Color.clear,
         accentOutline:         SettingsPalette.navy
     )
 
