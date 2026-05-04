@@ -321,10 +321,10 @@ struct SettingsTabView: View {
                         .foregroundStyle(theme.text)
 
                     Toggle("Move DMG to trash after installation", isOn: $preferences.autoTrashDMG)
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     Toggle("Reveal app in Finder after installation", isOn: $preferences.revealInFinder)
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Installation feedback:")
@@ -355,7 +355,7 @@ struct SettingsTabView: View {
                         get: { viewModel.automaticallyChecksForUpdates },
                         set: { viewModel.setAutomaticallyChecks($0) }
                     ))
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     Button("Check for Updates…") {
                         viewModel.checkForUpdates()

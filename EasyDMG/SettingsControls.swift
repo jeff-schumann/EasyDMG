@@ -33,6 +33,48 @@ struct PillToggleStyle: ToggleStyle {
     }
 }
 
+// MARK: - Themed Checkbox
+
+struct SettingsCheckboxStyle: ToggleStyle {
+    let theme: SettingsTheme
+
+    func makeBody(configuration: Configuration) -> some View {
+        SettingsCheckboxBody(configuration: configuration, theme: theme)
+    }
+}
+
+private struct SettingsCheckboxBody: View {
+    let configuration: ToggleStyleConfiguration
+    let theme: SettingsTheme
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let onFill: Color = colorScheme == .dark ? SettingsPalette.sand : SettingsPalette.navy
+        let onCheck: Color = colorScheme == .dark ? Color(hex: "1A110A") : .white
+
+        return HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 3.5)
+                    .fill(configuration.isOn ? onFill : Color.clear)
+                    .frame(width: 14, height: 14)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3.5)
+                            .strokeBorder(configuration.isOn ? Color.clear : theme.muted.opacity(0.7), lineWidth: 1)
+                    )
+                if configuration.isOn {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .heavy))
+                        .foregroundStyle(onCheck)
+                }
+            }
+            configuration.label
+                .foregroundStyle(theme.text)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { configuration.isOn.toggle() }
+    }
+}
+
 // MARK: - Navigation Tab Bar
 
 struct SettingsTabBar: View {
@@ -77,14 +119,36 @@ private struct NavSegmentStyle: ButtonStyle {
     let muted: Color
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        NavSegmentContent(configuration: configuration, isSelected: isSelected, muted: muted)
+    }
+}
+
+private struct NavSegmentContent: View {
+    let configuration: ButtonStyle.Configuration
+    let isSelected: Bool
+    let muted: Color
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let darkActiveFill = Color(hex: "1F140E")
+        let darkOutline = SettingsPalette.sand.opacity(0.55)
+        let fill: Color = isSelected
+            ? (colorScheme == .dark ? darkActiveFill : SettingsPalette.navy)
+            : .clear
+        let stroke: Color = (isSelected && colorScheme == .dark) ? darkOutline : .clear
+
+        return configuration.label
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(isSelected ? Color.white : muted)
             .padding(.vertical, 4)
             .padding(.horizontal, 12)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? SettingsPalette.navy : Color.clear)
+                    .fill(fill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(stroke, lineWidth: 1.5)
+                    )
                     .animation(.easeInOut(duration: 0.14), value: isSelected)
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
@@ -122,18 +186,39 @@ private struct OutlinedSegmentStyle: ButtonStyle {
     let theme: SettingsTheme
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        OutlinedSegmentContent(configuration: configuration, isSelected: isSelected, theme: theme)
+    }
+}
+
+private struct OutlinedSegmentContent: View {
+    let configuration: ButtonStyle.Configuration
+    let isSelected: Bool
+    let theme: SettingsTheme
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let darkActiveFill = Color(hex: "1F140E")
+        let darkActiveStroke = SettingsPalette.sand.opacity(0.55)
+
+        let fill: Color = isSelected
+            ? (colorScheme == .dark ? darkActiveFill : SettingsPalette.navy)
+            : .clear
+        let stroke: Color
+        if isSelected {
+            stroke = colorScheme == .dark ? darkActiveStroke : .clear
+        } else {
+            stroke = colorScheme == .dark ? .clear : theme.border
+        }
+
+        return configuration.label
             .font(.system(size: 11.5, weight: .bold))
             .foregroundStyle(isSelected ? Color.white : theme.muted)
             .padding(.vertical, 4)
             .padding(.horizontal, 11)
-            .background(
-                isSelected ? SettingsPalette.navy : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
+            .background(fill, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(isSelected ? Color.clear : theme.border, lineWidth: 1.5)
+                    .strokeBorder(stroke, lineWidth: 1.5)
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
             .animation(.easeInOut(duration: 0.15), value: isSelected)
@@ -144,12 +229,24 @@ private struct OutlinedSegmentStyle: ButtonStyle {
 
 struct AmberFilledButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        AmberFilledButtonContent(configuration: configuration)
+    }
+}
+
+private struct AmberFilledButtonContent: View {
+    let configuration: ButtonStyle.Configuration
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let fill: Color = colorScheme == .dark ? SettingsPalette.sand : SettingsPalette.navy
+        let label: Color = colorScheme == .dark ? Color(hex: "1A110A") : Color.white
+
+        return configuration.label
             .font(.system(size: 12.5, weight: .bold))
-            .foregroundStyle(Color.white)
+            .foregroundStyle(label)
             .padding(.vertical, 6)
             .padding(.horizontal, 14)
-            .background(SettingsPalette.navy, in: RoundedRectangle(cornerRadius: 7))
+            .background(fill, in: RoundedRectangle(cornerRadius: 7))
             .opacity(configuration.isPressed ? 0.85 : 1)
     }
 }
@@ -198,16 +295,20 @@ struct StepBubble: View {
     let number: Int
     let text: String
     let textColor: Color
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 10) {
+        let fill: Color = colorScheme == .dark ? SettingsPalette.sand : SettingsPalette.navy
+        let numberColor: Color = colorScheme == .dark ? Color(hex: "1A110A") : Color.white
+
+        return HStack(spacing: 10) {
             ZStack {
                 Circle()
-                    .fill(SettingsPalette.navy)
+                    .fill(fill)
                     .frame(width: 22, height: 22)
                 Text("\(number)")
                     .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(numberColor)
             }
             Text(text)
                 .font(.system(size: 12.5))

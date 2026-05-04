@@ -13,6 +13,7 @@ import AppKit
 enum SettingsPalette {
     static let amber        = Color(hex: "D28438")
     static let gold         = Color(hex: "E9A440")
+    static let sand         = Color(hex: "F1CB9C")
     static let walnut       = Color(hex: "643E26")
     static let darkAmber    = Color(hex: "B8621A")
     static let navy         = Color(nsColor: NSColor(name: nil) { appearance in
@@ -24,7 +25,7 @@ enum SettingsPalette {
 
     // Flat dark surface — paired with a thin gold hairline at the hero's bottom edge
     static let heroGradient = Color(hex: "2B1A0E")
-    static let heroHairline = SettingsPalette.gold.opacity(0.75)
+    static let heroHairline = SettingsPalette.sand.opacity(0.45)
 
     // Magic: gold radial glow from bottom-right over deep navy
     // static let heroGradient = RadialGradient(
@@ -92,14 +93,14 @@ struct SettingsTheme {
 
     static let dark = SettingsTheme(
         background:            Color(hex: "1a100a"),
-        surface:               Color(hex: "22283A"),
-        border:                Color(hex: "333D52"),
-        text:                  Color(hex: "EDE8E2"),
-        muted:                 Color(hex: "B8AC9E"),
-        successGreen:          Color(hex: "B0DA7F"),
+        surface:               Color(hex: "251812"),
+        border:                Color(hex: "3A271C"),
+        text:                  Color(hex: "F2EADD"),
+        muted:                 Color(hex: "A89685"),
+        successGreen:          Color(hex: "9BCB6A"),
         tabBarBackground:      Color.clear,
-        tabTrack:              Color(hex: "22283A"),
-        accentOutline:         Color(hex: "F1CB9C")
+        tabTrack:              Color(hex: "1F140E"),
+        accentOutline:         SettingsPalette.sand
     )
 }
 
