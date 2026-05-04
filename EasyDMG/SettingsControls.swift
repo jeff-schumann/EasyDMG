@@ -40,17 +40,26 @@ struct SettingsTabBar: View {
     let theme: SettingsTheme
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(SettingsTab.allCases, id: \.self) { tab in
-                Button(tab.rawValue) {
-                    withAnimation(.easeInOut(duration: 0.14)) { selection = tab }
+        HStack(spacing: 0) {
+            HStack(spacing: 2) {
+                ForEach(SettingsTab.allCases, id: \.self) { tab in
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.14)) { selection = tab }
+                    }) {
+                        ZStack {
+                            ForEach(SettingsTab.allCases, id: \.self) { sizing in
+                                Text(sizing.rawValue).hidden()
+                            }
+                            Text(tab.rawValue)
+                        }
+                    }
+                    .buttonStyle(NavSegmentStyle(isSelected: selection == tab, muted: theme.muted))
                 }
-                .buttonStyle(NavSegmentStyle(isSelected: selection == tab, muted: theme.muted))
-                .frame(maxWidth: .infinity)
             }
+            .padding(3)
+            .background(theme.tabTrack, in: RoundedRectangle(cornerRadius: 8))
+            Spacer(minLength: 0)
         }
-        .padding(3)
-        .background(theme.tabTrack, in: RoundedRectangle(cornerRadius: 8))
         .padding(.top, 6)
         .padding(.bottom, 8)
         .padding(.horizontal, 16)
@@ -72,13 +81,13 @@ private struct NavSegmentStyle: ButtonStyle {
             .font(.system(size: 12, weight: .bold))
             .foregroundStyle(isSelected ? Color.white : muted)
             .padding(.vertical, 4)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(isSelected ? SettingsPalette.navy : Color.clear)
                     .animation(.easeInOut(duration: 0.14), value: isSelected)
             )
-            .contentShape(Rectangle())
+            .contentShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -126,6 +135,7 @@ private struct OutlinedSegmentStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(isSelected ? Color.clear : theme.border, lineWidth: 1.5)
             )
+            .contentShape(RoundedRectangle(cornerRadius: 6))
             .animation(.easeInOut(duration: 0.15), value: isSelected)
     }
 }

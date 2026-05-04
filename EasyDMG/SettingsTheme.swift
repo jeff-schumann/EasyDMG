@@ -22,17 +22,21 @@ enum SettingsPalette {
             : NSColor(srgbRed: 0x2E / 255, green: 0x43 / 255, blue: 0x62 / 255, alpha: 1)
     })
 
+    // Flat dark surface — paired with a thin gold hairline at the hero's bottom edge
+    static let heroGradient = Color(hex: "2B1A0E")
+    static let heroHairline = SettingsPalette.gold.opacity(0.75)
+
     // Magic: gold radial glow from bottom-right over deep navy
-    static let heroGradient = RadialGradient(
-        gradient: Gradient(stops: [
-            .init(color: Color(hex: "F1CB9C"), location: 0.0),
-            .init(color: Color(hex: "8C6E47"), location: 0.35),
-            .init(color: Color(hex: "1A2238"), location: 1.0)
-        ]),
-        center: .bottomTrailing,
-        startRadius: 0,
-        endRadius: 340
-    )
+    // static let heroGradient = RadialGradient(
+    //     gradient: Gradient(stops: [
+    //         .init(color: Color(hex: "F1CB9C"), location: 0.0),
+    //         .init(color: Color(hex: "8C6E47"), location: 0.35),
+    //         .init(color: Color(hex: "1A2238"), location: 1.0)
+    //     ]),
+    //     center: .bottomTrailing,
+    //     startRadius: 0,
+    //     endRadius: 340
+    // )
 
     // Subtle all-navy gradient: surface → border
     // static let heroGradient = LinearGradient(
@@ -87,7 +91,7 @@ struct SettingsTheme {
     )
 
     static let dark = SettingsTheme(
-        background:            Color(hex: "191C24"),
+        background:            Color(hex: "1a100a"),
         surface:               Color(hex: "22283A"),
         border:                Color(hex: "333D52"),
         text:                  Color(hex: "EDE8E2"),

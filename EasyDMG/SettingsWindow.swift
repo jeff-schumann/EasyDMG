@@ -74,6 +74,13 @@ struct SettingsView: View {
                     ? AnyView(SettingsPalette.heroGradient)
                     : AnyView(Color.clear)
             )
+            .overlay(alignment: .bottom) {
+                if colorScheme == .dark {
+                    Rectangle()
+                        .fill(SettingsPalette.heroHairline)
+                        .frame(height: 1)
+                }
+            }
             Group {
                 switch selectedTab {
                 case .setup:
