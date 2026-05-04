@@ -60,7 +60,7 @@ Many app bundles contain framework symlinks such as `Versions/Current -> Version
 
 Some DMGs contain `.app` files that are actually installer wrappers. They expect to run once, install the real app elsewhere, then quit.
 
-**Current behavior**: EasyDMG falls back to manual installation when a top-level `.pkg` or `.mpkg` is present. It also falls back when the only app candidate looks like an installer, setup assistant, helper, readme, or uninstaller instead of the main app.
+**Current behavior**: EasyDMG falls back to manual installation when a top-level `.pkg` or `.mpkg` is present. It also falls back when the only app candidate looks like an installer, setup assistant, helper, readme, or uninstaller instead of the main app, including compact names like `FooInstaller.app`.
 
 ### 8. Multi-App DMGs With Uninstallers or Helpers - Rating: 2/10 - RESOLVED
 
@@ -98,4 +98,4 @@ Copying without enough free space could leave a partial app behind.
 
 Not every directory ending in `.app` is necessarily a normal launchable app bundle.
 
-**Current behavior**: Before copying a single app candidate, EasyDMG verifies `Contents/Info.plist`, requires `CFBundlePackageType == APPL`, requires a non-empty `CFBundleExecutable`, and checks that the referenced executable exists. If validation fails, it falls back to manual installation.
+**Current behavior**: Before copying a single app candidate, EasyDMG verifies `Contents/Info.plist`, requires `CFBundlePackageType == APPL`, requires a non-empty `CFBundleExecutable`, and checks that the referenced executable exists and is executable. If validation fails, it falls back to manual installation.

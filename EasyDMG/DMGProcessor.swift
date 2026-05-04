@@ -82,6 +82,7 @@ class DMGProcessor: ObservableObject {
         case notApplicationBundle = "not_application_bundle"
         case missingExecutableName = "missing_executable_name"
         case missingExecutableFile = "missing_executable_file"
+        case executableNotExecutable = "executable_not_executable"
     }
 
     @Published var isProcessing = false
@@ -742,13 +743,18 @@ class DMGProcessor: ObservableObject {
     }
 
     private func isInstallerLikeApp(at path: String) -> Bool {
-        let appName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        let normalizedName = URL(fileURLWithPath: path)
+            .deletingPathExtension()
+            .lastPathComponent
+            .lowercased()
         let words = Set(
-            appName
-                .lowercased()
+            normalizedName
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
                 .filter { !$0.isEmpty }
         )
+        let compactName = normalizedName
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
 
         return words.contains("install") ||
             words.contains("installer") ||
@@ -757,7 +763,12 @@ class DMGProcessor: ObservableObject {
             words.contains("uninstaller") ||
             words.contains("helper") ||
             words.contains("readme") ||
-            (words.contains("read") && words.contains("me"))
+            (words.contains("read") && words.contains("me")) ||
+            compactName.hasSuffix("installer") ||
+            compactName.hasSuffix("uninstaller") ||
+            compactName.hasSuffix("setup") ||
+            compactName.hasSuffix("helper") ||
+            compactName.hasSuffix("readme")
     }
 
     private func appBundleValidationIssue(for path: String) -> AppBundleValidationIssue? {
@@ -790,6 +801,10 @@ class DMGProcessor: ObservableObject {
         guard FileManager.default.fileExists(atPath: executableURL.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else {
             return .missingExecutableFile
+        }
+
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            return .executableNotExecutable
         }
 
         return nil
