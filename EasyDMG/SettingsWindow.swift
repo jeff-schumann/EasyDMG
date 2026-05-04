@@ -251,15 +251,19 @@ enum DefaultHandlerHelper {
         "com.apple.disk-image-udif" as CFString,
         "public.disk-image" as CFString
     ]
+    // Finder may consult the all-roles handler for double-click opens.
+    private static let handlerRoles: [LSRolesMask] = [.viewer, .all]
 
     static func isDefaultDMGHandler() -> Bool {
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         for uti in dmgUTIs {
-            guard let handler = LSCopyDefaultRoleHandlerForContentType(uti, .viewer)?.takeRetainedValue() as String? else {
-                return false
-            }
-            if handler.caseInsensitiveCompare(bundleID) != .orderedSame {
-                return false
+            for role in handlerRoles {
+                guard let handler = LSCopyDefaultRoleHandlerForContentType(uti, role)?.takeRetainedValue() as String? else {
+                    return false
+                }
+                if handler.caseInsensitiveCompare(bundleID) != .orderedSame {
+                    return false
+                }
             }
         }
         return true
@@ -268,7 +272,9 @@ enum DefaultHandlerHelper {
     static func setAsDefaultDMGHandler() {
         guard let bundleID = Bundle.main.bundleIdentifier as CFString? else { return }
         for uti in dmgUTIs {
-            LSSetDefaultRoleHandlerForContentType(uti, .viewer, bundleID)
+            for role in handlerRoles {
+                LSSetDefaultRoleHandlerForContentType(uti, role, bundleID)
+            }
         }
     }
 }
@@ -326,6 +332,7 @@ struct AboutTabView: View {
 struct SettingsTabView: View {
     @ObservedObject var preferences: UserPreferences
     let theme: SettingsTheme
+    @StateObject private var notificationPermissions = NotificationPermissionViewModel()
     @EnvironmentObject private var viewModel: CheckForUpdatesViewModel
 
     var body: some View {
@@ -354,9 +361,30 @@ struct SettingsTabView: View {
                             label: { $0.shortName },
                             theme: theme
                         )
+
+                        if preferences.feedbackMode == .notification,
+                           notificationPermissions.state.shouldShowFeedbackWarning {
+                            NotificationFeedbackNotice(
+                                state: notificationPermissions.state,
+                                theme: theme,
+                                action: notificationPermissions.performPrimaryAction
+                            )
+                        }
                     }
                     .padding(.top, 4)
                 }
+
+                Rectangle()
+                    .fill(theme.border)
+                    .frame(height: 1)
+
+                // Notifications
+                NotificationSettingsSection(
+                    state: notificationPermissions.state,
+                    isRequesting: notificationPermissions.isRequesting,
+                    theme: theme,
+                    action: notificationPermissions.performPrimaryAction
+                )
 
                 Rectangle()
                     .fill(theme.border)
@@ -385,6 +413,212 @@ struct SettingsTabView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
         }
+        .onAppear {
+            notificationPermissions.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            notificationPermissions.refresh()
+        }
+        .onChange(of: preferences.feedbackMode) { mode in
+            if mode == .notification {
+                notificationPermissions.prepareForNotificationFeedback()
+            }
+        }
+    }
+}
+
+private struct NotificationSettingsSection: View {
+    let state: NotificationPermissionState
+    let isRequesting: Bool
+    let theme: SettingsTheme
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Notifications")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(theme.text)
+
+                NotificationStatusBadge(state: state, theme: theme)
+
+                Spacer()
+            }
+
+            Text(state.settingsDescription)
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.muted)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            NotificationPermissionActionButton(
+                title: isRequesting ? "Requesting…" : state.primaryActionTitle,
+                isPrimary: state.usesPrimaryAction,
+                isDisabled: state == .loading || isRequesting,
+                theme: theme,
+                action: action
+            )
+        }
+    }
+}
+
+private struct NotificationPermissionActionButton: View {
+    let title: String
+    let isPrimary: Bool
+    let isDisabled: Bool
+    let theme: SettingsTheme
+    let action: () -> Void
+
+    var body: some View {
+        if isPrimary {
+            Button(title) {
+                action()
+            }
+            .buttonStyle(AmberFilledButtonStyle())
+            .disabled(isDisabled)
+            .fixedSize()
+        } else {
+            Button(title) {
+                action()
+            }
+            .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+            .disabled(isDisabled)
+            .fixedSize()
+        }
+    }
+}
+
+private struct NotificationStatusBadge: View {
+    let state: NotificationPermissionState
+    let theme: SettingsTheme
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(indicatorColor)
+                .frame(width: 6, height: 6)
+
+            Text(state.badgeText)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(theme.text)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(theme.border, lineWidth: 1)
+        )
+        .fixedSize()
+    }
+
+    private var indicatorColor: Color {
+        switch state {
+        case .on:
+            return theme.successGreen
+        case .limited, .notDetermined:
+            return SettingsPalette.gold
+        case .off:
+            return Color(hex: "C34834")
+        case .loading:
+            return theme.muted
+        }
+    }
+}
+
+private struct NotificationFeedbackNotice: View {
+    let state: NotificationPermissionState
+    let theme: SettingsTheme
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(SettingsPalette.gold)
+                .padding(.top, 1)
+
+            Text(state.feedbackWarningText)
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.muted)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+
+            if state != .loading {
+                Button(state.warningActionTitle) {
+                    action()
+                }
+                .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+            }
+        }
+        .padding(10)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.border, lineWidth: 1)
+        )
+    }
+}
+
+private extension NotificationPermissionState {
+    var badgeText: String {
+        switch self {
+        case .loading:       return "Checking"
+        case .notDetermined: return "Not Set"
+        case .on:            return "On"
+        case .limited:       return "Limited"
+        case .off:           return "Off"
+        }
+    }
+
+    var settingsDescription: String {
+        switch self {
+        case .loading:
+            return "EasyDMG is checking macOS notification settings."
+        case .notDetermined, .on, .limited, .off:
+            return "EasyDMG uses notifications for failed install details, and for installation complete messages when notification feedback is selected above."
+        }
+    }
+
+    var primaryActionTitle: String {
+        switch self {
+        case .loading:       return "Checking…"
+        case .notDetermined: return "Turn On Notifications…"
+        case .on, .limited:  return "Notification Settings…"
+        case .off:           return "Open Notification Settings…"
+        }
+    }
+
+    var warningActionTitle: String {
+        switch self {
+        case .notDetermined: return "Turn On…"
+        default:             return "Open Settings…"
+        }
+    }
+
+    var feedbackWarningText: String {
+        switch self {
+        case .notDetermined:
+            return "EasyDMG needs notification permission before this feedback mode can show completion alerts."
+        case .limited:
+            return "Notification banners are disabled, so EasyDMG will show the progress bar until banners are enabled."
+        case .off:
+            return "Notifications are off, so EasyDMG will show the progress bar until they are turned on."
+        case .loading:
+            return "EasyDMG is checking whether notification feedback is available."
+        case .on:
+            return ""
+        }
+    }
+
+    var shouldShowFeedbackWarning: Bool {
+        !canUseNotificationFeedback
+    }
+
+    var usesPrimaryAction: Bool {
+        self == .notDetermined || self == .off
     }
 }
 

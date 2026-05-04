@@ -35,6 +35,7 @@ struct EasyDMGApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private let dmgProcessor = DMGProcessor()
     private var launchedWithFiles = false
+    private var launchModeResolved = false
     private let updaterController: SPUStandardUpdaterController
     private var isWaitingForUpdateCheck = false
 
@@ -134,6 +135,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
         // Small delay to let file opening happen first
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.launchModeResolved = true
+
             if !self.launchedWithFiles {
                 // Launched directly - show settings window with dock icon
                 self.diagnostic("✅ Launched directly - showing settings window")
@@ -206,8 +209,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Quit when settings window is closed
-        return true
+        guard launchModeResolved else {
+            diagnostic("⚠️ Last window closed before launch mode resolved; keeping app alive")
+            return false
+        }
+
+        return !launchedWithFiles && !dmgProcessor.isProcessing
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -232,6 +232,21 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private func sendFailureNotificationIfAvailable(message: String) async {
+        guard UserPreferences.shared.feedbackMode != .silent else {
+            return
+        }
+
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let permissionState = NotificationPermissionState(settings: settings)
+        guard permissionState.canUseNotificationFeedback else {
+            diagnostic("Failure notification unavailable: \(permissionState.rawValue)")
+            return
+        }
+
+        await sendNotification(title: "EasyDMG install failed", message: message)
+    }
+
     private func requestNotificationPermissionsIfNeeded() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
 
@@ -240,13 +255,15 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    // Get the effective feedback mode (fallback to progress bar if notifications denied)
+    // Get the effective feedback mode (fallback to progress bar if notifications cannot show banners)
     private func effectiveFeedbackMode() async -> FeedbackMode {
         let userMode = UserPreferences.shared.feedbackMode
 
         if userMode == .notification {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
-            if settings.authorizationStatus == .denied {
+            let permissionState = NotificationPermissionState(settings: settings)
+            if !permissionState.canUseNotificationFeedback {
+                diagnostic("Notification feedback unavailable, falling back to progress bar: \(permissionState.rawValue)")
                 return .progressBar
             }
         }
@@ -1260,6 +1277,7 @@ class DMGProcessor: ObservableObject {
     private func handleError(_ message: String) async {
         diagnostic("Error: \(message)")
         showProgress("Error: \(message)", progress: 0.0)
+        await sendFailureNotificationIfAvailable(message: message)
 
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         ProgressWindowController.shared.hide()
