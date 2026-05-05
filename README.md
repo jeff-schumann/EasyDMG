@@ -133,6 +133,13 @@ Contributions welcome! Please note:
 3. Review [EDGE_CASES.md](EDGE_CASES.md) for known issues and testing priorities
 4. Open an issue to discuss proposed changes before submitting large PRs
 
+Or contribute by buying me a coffee! It fuels further development :)
+<p align="left">
+  <a href="https://www.buymeacoffee.com/yourusername">
+    <img src="https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-orange?style=flat-square&logo=buy-me-a-coffee" alt="Buy Me A Coffee">
+  </a>
+</p>
+
 ## Support
 
 Found a bug? Have a feature request? [Open an issue](https://github.com/jeff-schumann/EasyDMG/issues).
