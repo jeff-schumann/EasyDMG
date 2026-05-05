@@ -18,7 +18,7 @@
   <li>Expanded compatibility to macOS 13.0 and later.</li>
 </ul>
 ]]></description>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v2.0.0/EasyDMG_v2.0.0.dmg" length="4470031" type="application/octet-stream" sparkle:edSignature="8U9+34ze0hVIpRU9G8w2cd8gVjcown+LFhjqibAjLSd4hfCZAIPEmPLQVHuGPDWADeTKSr0eqPvjLVQp4aGxAA=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v2.0.0/EasyDMG_v2.0.0.dmg" length="4470031" type="application/octet-stream" sparkle:edSignature="8U9+34ze0hVIpRU9G8w2cd8gVjcown+LFhjqibAjLSd4hfCZAIPEmPLQVHuGPDWADeTKSr0eqPvjLVQp4aGxAA=="/>
         </item>
         <item>
             <title>1.1.1</title>

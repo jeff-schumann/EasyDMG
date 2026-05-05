@@ -6,7 +6,7 @@
   </p>
   <br>
   <font size="4"><strong> Download .dmg from 
-    <a href="https://github.com/jefe-johann/EasyDMG/releases">Releases</a>
+    <a href="https://github.com/jeff-schumann/EasyDMG/releases">Releases</a>
   </strong></font>
 </div>
 
@@ -42,7 +42,7 @@ After setting EasyDMG as your default app for opening DMGs (instructions below -
 
 ## Installation
 
-Download the latest release from the [Releases](https://github.com/jefe-johann/EasyDMG/releases) page and drag to Applications. Enjoy it.. it could be the last time you perform this annoying task!
+Download the latest release from the [Releases](https://github.com/jeff-schumann/EasyDMG/releases) page and drag to Applications. Enjoy it.. it could be the last time you perform this annoying task!
 
 ### Setting as Default DMG Handler
 
@@ -101,7 +101,7 @@ Some edge cases are documented and being tested - see [EDGE_CASES.md](EDGE_CASES
 ### Build Instructions
 
 ```bash
-git clone https://github.com/jefe-johann/EasyDMG.git
+git clone https://github.com/jeff-schumann/EasyDMG.git
 cd EasyDMG
 xcodebuild -project EasyDMG.xcodeproj -scheme EasyDMG -configuration Debug build
 ```
@@ -138,7 +138,7 @@ Contributions welcome! Please note:
 
 ## Support
 
-Found a bug? Have a feature request? [Open an issue](https://github.com/jefe-johann/EasyDMG/issues).
+Found a bug? Have a feature request? [Open an issue](https://github.com/jeff-schumann/EasyDMG/issues).
 
 EasyDMG keeps a local support log at `~/Library/Logs/EasyDMG/support.log`. It stays on your Mac unless you choose to share it, and it can help explain why EasyDMG installed an app, skipped it, or fell back to manual mode.
 
