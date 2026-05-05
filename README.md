@@ -135,7 +135,7 @@ Contributions welcome! Please note:
 
 Or contribute by buying me a coffee! It fuels further development :)
 <p align="left">
-  <a href="https://www.buymeacoffee.com/yourusername">
+  <a href="https://www.buymeacoffee.com/jeff.schumann">
     <img src="https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-orange?style=flat-square&logo=buy-me-a-coffee" alt="Buy Me A Coffee">
   </a>
 </p>
