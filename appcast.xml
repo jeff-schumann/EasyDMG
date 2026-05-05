@@ -3,6 +3,24 @@
     <channel>
         <title>EasyDMG</title>
         <item>
+            <title>2.0.0</title>
+            <pubDate>Tue, 05 May 2026 00:03:21 -0400</pubDate>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>2.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+<h2>EasyDMG 2.0.0</h2>
+<p>This is the biggest EasyDMG update yet: a full settings redesign, deeper stability work, and smarter decisions when DMGs get weird.</p>
+<ul>
+  <li>Rebuilt the settings window with a more polished design, clearer setup flow, and stronger light/dark mode support.</li>
+  <li>Greatly improved fallback handling for installer-style DMGs, helper apps, multiple-app volumes, and unusual app bundles.</li>
+  <li>Hardened notifications, launch handling, and diagnostic logging so success, fallback, and error states are easier to trust and troubleshoot.</li>
+  <li>Expanded compatibility to macOS 13.0 and later.</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v2.0.0/EasyDMG_v2.0.0.dmg" length="4470031" type="application/octet-stream" sparkle:edSignature="8U9+34ze0hVIpRU9G8w2cd8gVjcown+LFhjqibAjLSd4hfCZAIPEmPLQVHuGPDWADeTKSr0eqPvjLVQp4aGxAA=="/>
+        </item>
+        <item>
             <title>1.1.1</title>
             <pubDate>Sun, 26 Apr 2026 01:08:45 -0400</pubDate>
             <sparkle:version>7</sparkle:version>
