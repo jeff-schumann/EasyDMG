@@ -309,12 +309,12 @@ struct AboutTabView: View {
 
                 HStack(spacing: 8) {
                     Button("GitHub ↗") {
-                        NSWorkspace.shared.open(URL(string: "https://github.com/jefe-johann/EasyDMG")!)
+                        NSWorkspace.shared.open(URL(string: "https://github.com/jeff-schumann/EasyDMG")!)
                     }
                     .buttonStyle(AmberOutlineButtonStyle(theme: theme))
 
                     Button("Report Issue ↗") {
-                        NSWorkspace.shared.open(URL(string: "https://github.com/jefe-johann/EasyDMG/issues")!)
+                        NSWorkspace.shared.open(URL(string: "https://github.com/jeff-schumann/EasyDMG/issues")!)
                     }
                     .buttonStyle(AmberOutlineButtonStyle(theme: theme))
                 }
