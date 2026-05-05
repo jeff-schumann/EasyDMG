@@ -5,8 +5,8 @@
     Automate DMG installation on macOS. Double-click a DMG file, and EasyDMG handles the rest — mounting, copying to Applications, unmounting, and cleanup.
   </p>
   <br>
-  <font size="4"><strong> Download .dmg from 
-    <a href="https://github.com/jeff-schumann/EasyDMG/releases">Releases</a>
+  <font size="4"><strong> Download the latest version from <a href="https://github.com/jeff-schumann/EasyDMG/releases">Releases</a>, open the DMG and drag to Applications.
+    <br>Enjoy it.. it could be the last time you perform this annoying task!
   </strong></font>
 </div>
 
@@ -34,15 +34,18 @@ After setting EasyDMG as your default app for opening DMGs (instructions below -
 ## Screenshots
 
 <p align="center">
-<img width="500" alt="EasyDMG Settings Window" src="https://github.com/user-attachments/assets/6e6b094e-5a3e-403a-89a8-1965cef1ccfb" />
+  <img src="https://github.com/user-attachments/assets/5e454a37-bef2-47ce-9853-5febc06fd07c" width="48%" alt="Setup - Light Mode" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="https://github.com/user-attachments/assets/5a6f142b-f8e2-4719-9fc3-3fe8b4327a3e" width="48%" alt="Settings - Dark Mode" />
 </p>
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/d5632cd3-7e68-4e35-8568-d9ebcfc3dcc7" alt="EasyDMG Progress Bar" width="425" style="border-radius: 15px;">
 </p>
 
 ## Installation
 
-Download the latest release from the [Releases](https://github.com/jeff-schumann/EasyDMG/releases) page and drag to Applications. Enjoy it.. it could be the last time you perform this annoying task!
+Download the latest release from the [Releases](https://github.com/jeff-schumann/EasyDMG/releases) page!
 
 ### Setting as Default DMG Handler
 
@@ -62,14 +65,18 @@ Don't want to use EasyDMG for a specific DMG? You can still right-click and Open
 
 ## Privacy
 
-This app doesn't connect to the internet. Nothing leaves your machine. No data is stored. 
+EasyDMG is designed to be private by default. 
+
+* **Local Only:** All processing happens on your Mac. Your files and data never leave your machine.
+* **No Tracking:** There are no analytics, crash reporters, or third-party trackers.
+* **Minimal Connection:** The app only connects to the internet to check for updates via **Sparkle** (connecting directly to GitHub). No personal information is transmitted during this check.
+* **Data Storage:** Application settings and logs are stored strictly on your local disk (`~/Library/Logs/EasyDMG`). These logs exist solely to help you troubleshoot; they are only shared if you choose to email them to me for support.
 
 EasyDMG's privacy policy is available in [PRIVACY.md](PRIVACY.md).
 
 ## Requirements
 
 - macOS 13 (Ventura) or later
-- Tested regularly on macOS 15.7
 
 ## Distribution
 
@@ -108,16 +115,6 @@ xcodebuild -project EasyDMG.xcodeproj -scheme EasyDMG -configuration Debug build
 
 The build script automatically copies the app to `/Applications/EasyDMG_XCODE_TEST.app` for testing.
 
-## Architecture
-
-Built with SwiftUI and AppKit:
-
-- **EasyDMGApp.swift** - App lifecycle and file handling
-- **DMGProcessor.swift** - Core DMG processing logic
-- **ProgressWindow.swift** - Floating notification-style progress UI
-- **SettingsWindow.swift** - User preferences and setup instructions
-- **Sparkle** - Automatic update framework
-
 ## License
 
 EasyDMG is dual-licensed:
@@ -125,7 +122,7 @@ EasyDMG is dual-licensed:
 - **GPL-3.0** for open source use - see [LICENSE](LICENSE) file
 - **Commercial License** available for proprietary use - see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)
 
-If you're using EasyDMG in an open source project, you're covered by GPL-3.0. If you need to use it in a closed-source/proprietary application, contact us about commercial licensing.
+If you're using EasyDMG in an open source project, you're covered by GPL-3.0. If you need to use it in a closed-source/proprietary application, contact me about commercial licensing.
 
 ## Contributing
 
