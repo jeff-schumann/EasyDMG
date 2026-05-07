@@ -953,6 +953,44 @@ class DMGProcessor: ObservableObject {
             }
         }
 
+        // Quit any running instance before installing — otherwise the OS keeps the running
+        // process bound to the old bundle and "Open after install" activates the stale copy.
+        if let bundleID = bundleIdentifier(at: appPath) {
+            let canProceed = await quitIfRunning(
+                appName: resolvedAppName,
+                bundleID: bundleID,
+                dmgName: dmgName
+            )
+            if !canProceed {
+                diagnostic("Installation cancelled at running-app prompt for \(resolvedAppName)")
+                let didTrashDMG = await unmountAndCleanup(
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath,
+                    dmgName: dmgName,
+                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
+                )
+
+                if currentFeedbackMode == .notification && didTrashDMG {
+                    await sendNotification(
+                        title: "EasyDMG",
+                        message: "\(resolvedAppName) install cancelled; disk image moved to Trash"
+                    )
+                }
+
+                ProgressWindowController.shared.hide()
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "skipped",
+                    details: [
+                        "app": resolvedAppName,
+                        "reason": "running_app_cancelled",
+                        "trashed_dmg": boolString(didTrashDMG)
+                    ]
+                )
+                return
+            }
+        }
+
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
         diagnostic("Calculated app size: \(appSize) bytes for \(appPath)")
@@ -1108,6 +1146,156 @@ class DMGProcessor: ObservableObject {
 
                 let response = alert.runModal()
                 continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    private func bundleIdentifier(at appPath: String) -> String? {
+        let infoPlistURL = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: infoPlistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let info = plist as? [String: Any] else {
+            return nil
+        }
+        return info["CFBundleIdentifier"] as? String
+    }
+
+    private func runningInstances(of bundleID: String) -> [NSRunningApplication] {
+        let currentPID = NSRunningApplication.current.processIdentifier
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != currentPID }
+    }
+
+    private func quitRunningInstances(_ apps: [NSRunningApplication]) async -> Bool {
+        for app in apps where !app.isTerminated {
+            app.terminate()
+        }
+
+        let pollIntervalNanos: UInt64 = 250_000_000
+        let maxAttempts = 12
+
+        for _ in 0..<maxAttempts {
+            if apps.allSatisfy({ $0.isTerminated }) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: pollIntervalNanos)
+        }
+
+        return apps.allSatisfy { $0.isTerminated }
+    }
+
+    private func showQuitRunningAppDialog(appName: String) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .informational
+                alert.messageText = "EasyDMG"
+                alert.informativeText = "\(appName) is currently running.\n\nQuit it and continue with installation?"
+
+                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+                   let icon = NSImage(contentsOfFile: iconPath) {
+                    alert.icon = icon
+                }
+
+                alert.addButton(withTitle: "Quit & Install")
+                alert.addButton(withTitle: "Cancel")
+
+                let response = alert.runModal()
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    private func showQuitFailedDialog(appName: String) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "EasyDMG"
+                alert.informativeText = "\(appName) didn't quit. It may have unsaved work or an open dialog.\n\nClose it manually, then try again."
+
+                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+                   let icon = NSImage(contentsOfFile: iconPath) {
+                    alert.icon = icon
+                }
+
+                alert.addButton(withTitle: "Try Again")
+                alert.addButton(withTitle: "Cancel")
+
+                let response = alert.runModal()
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    private func quitIfRunning(appName: String, bundleID: String, dmgName: String) async -> Bool {
+        var instances = runningInstances(of: bundleID)
+
+        support(
+            event: "running_instance_check",
+            details: [
+                "app": appName,
+                "dmg": dmgName,
+                "bundle_id": bundleID,
+                "running_count": String(instances.count)
+            ]
+        )
+
+        if instances.isEmpty {
+            return true
+        }
+
+        diagnostic("Detected \(instances.count) running instance(s) of \(appName) (\(bundleID))")
+
+        let userAgreedToQuit = await showQuitRunningAppDialog(appName: appName)
+        support(
+            event: "quit_prompt_decision",
+            details: [
+                "app": appName,
+                "dmg": dmgName,
+                "action": userAgreedToQuit ? "quit" : "cancel"
+            ]
+        )
+
+        if !userAgreedToQuit {
+            return false
+        }
+
+        while true {
+            let success = await quitRunningInstances(instances)
+            let remaining = instances.filter { !$0.isTerminated }.count
+
+            support(
+                event: "terminate_result",
+                details: [
+                    "app": appName,
+                    "dmg": dmgName,
+                    "success": boolString(success),
+                    "remaining": String(remaining)
+                ]
+            )
+
+            if success {
+                return true
+            }
+
+            let retry = await showQuitFailedDialog(appName: appName)
+            support(
+                event: "quit_retry_decision",
+                details: [
+                    "app": appName,
+                    "dmg": dmgName,
+                    "action": retry ? "retry" : "cancel"
+                ]
+            )
+
+            if !retry {
+                return false
+            }
+
+            instances = runningInstances(of: bundleID)
+            if instances.isEmpty {
+                return true
             }
         }
     }
