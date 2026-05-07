@@ -1070,13 +1070,14 @@ class DMGProcessor: ObservableObject {
             didTrashDMG = trashDMGIfNeeded(at: dmgPath, shouldTrash: false, dmgName: dmgName)
         }
 
+        let didOpenApp = await openInstalledAppIfNeeded(at: destinationPath)
+
         if currentFeedbackMode == .progressBar {
             showProgress("Installation complete!", progress: 1.0)
             try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
 
         ProgressWindowController.shared.hide()
-        let didOpenApp = await openInstalledAppIfNeeded(at: destinationPath)
         diagnostic("✅ Processing complete for \(resolvedAppName)")
         recordCompletion(
             dmgName: dmgName,
@@ -1330,6 +1331,21 @@ class DMGProcessor: ObservableObject {
     private func openInstalledAppIfNeeded(at path: String) async -> Bool {
         guard UserPreferences.shared.openAppAfterInstall else { return false }
 
+        if currentFeedbackMode == .progressBar {
+            showProgress("Chewing open the packaging...", progress: 0.9)
+
+            async let didOpenApp = openInstalledApp(at: path)
+            async let minimumDwell: Void = waitForOpenAppProgressDwell()
+
+            let result = await didOpenApp
+            await minimumDwell
+            return result
+        }
+
+        return await openInstalledApp(at: path)
+    }
+
+    private func openInstalledApp(at path: String) async -> Bool {
         diagnostic("Opening installed app: \(path)")
 
         let configuration = NSWorkspace.OpenConfiguration()
@@ -1356,6 +1372,10 @@ class DMGProcessor: ObservableObject {
                 }
             }
         }
+    }
+
+    private func waitForOpenAppProgressDwell() async {
+        try? await Task.sleep(nanoseconds: 800_000_000)
     }
 
     private func handleError(_ message: String) async {
