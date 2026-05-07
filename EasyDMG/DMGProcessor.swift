@@ -110,12 +110,24 @@ class DMGProcessor: ObservableObject {
     private var currentFeedbackMode: FeedbackMode = .progressBar
     private var pendingDMGURLs: [URL] = []
     private var isDrainingQueue = false
+    private var usedMagicMessages = Set<String>()
 
-    // Progressive messages shown at intervals if operation takes too long
-    private let magicMessages: [(delay: UInt64, message: String)] = [
-        (4_000_000_000, "🪄 Invoking ancient hamster magic..."),
-        (8_000_000_000, "Opening a high capacity portal 🎩..."),
-        (12_000_000_000, "🐹 Hamster is strong, but app is big...")
+    // Progressive messages shown if an operation takes too long.
+    private let magicMessageInterval: UInt64 = 4_000_000_000
+    private let magicMessages = [
+        "🪄 Invoking ancient hamster magic...",
+        "Opening a high capacity portal 🎩...",
+        "🐹 Hamster is strong, but app is big...",
+        "I found a very interesting seed. One moment... 🌻",
+        "Regenerating mana... 💧",
+        "Trying to fit the whole app in one cheek... 🐹",
+        "Doing laps on the wheel to power the CPU... 🎡",
+        "The wizard is deep in trance. Do not startle! 🧘‍♂️",
+        "Rearranging the nest for optimal performance... 🏠",
+        "Consulting the Forbidden Scrolls... 📜",
+        "One sec. Gotta wiggle my nose.",
+        "Whispering the secret password to the Gatekeeper... 🔑",
+        "Locating buried stash of magic beans... 🫘"
     ]
 
     private func diagnostic(_ message: @autoclosure () -> String) {
@@ -174,8 +186,37 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private func resetMagicMessageSession() {
+        usedMagicMessages.removeAll()
+    }
+
+    private func randomMagicMessage() -> String {
+        if usedMagicMessages.count >= magicMessages.count {
+            usedMagicMessages.removeAll()
+        }
+
+        let availableMessages = magicMessages.filter { !usedMagicMessages.contains($0) }
+        let magicMessage = availableMessages.randomElement() ?? "Still working..."
+        usedMagicMessages.insert(magicMessage)
+        return magicMessage
+    }
+
+    private func startMagicFallbackTimer(progress: Double) -> Task<Void, Never> {
+        Task { @MainActor [currentFeedbackMode] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: magicMessageInterval)
+                guard !Task.isCancelled else { return }
+                guard currentFeedbackMode == .progressBar else { continue }
+
+                let magicMessage = randomMagicMessage()
+                ProgressWindowController.shared.update(message: magicMessage, progress: progress)
+                DiagnosticLogger.shared.diagnostic("📝 \(magicMessage) (\(Int(progress * 100))%)")
+            }
+        }
+    }
+
     /// Runs a potentially slow operation with progressive fallback messages if it takes too long.
-    /// Shows different messages at 4s, 8s, and 12s intervals to indicate the app is still working.
+    /// Shows a random message at regular intervals to indicate the app is still working.
     private func withMagicFallback<T: Sendable>(
         message: String,
         progress: Double,
@@ -188,25 +229,10 @@ class DMGProcessor: ObservableObject {
             try operation()
         }
 
-        // Start timer tasks for each progressive message
-        let timerTasks = magicMessages.map { delayNanos, magicMsg in
-            Task { @MainActor [currentFeedbackMode] in
-                try await Task.sleep(nanoseconds: delayNanos)
-                if !Task.isCancelled && currentFeedbackMode == .progressBar {
-                    ProgressWindowController.shared.update(message: magicMsg, progress: progress)
-                    DiagnosticLogger.shared.diagnostic("📝 \(magicMsg) (\(Int(progress * 100))%)")
-                }
-            }
-        }
+        let timerTask = startMagicFallbackTimer(progress: progress)
+        defer { timerTask.cancel() }
 
-        do {
-            let result = try await operationTask.value
-            timerTasks.forEach { $0.cancel() }
-            return result
-        } catch {
-            timerTasks.forEach { $0.cancel() }
-            throw error
-        }
+        return try await operationTask.value
     }
 
     /// Non-throwing version for operations that don't throw
@@ -221,19 +247,10 @@ class DMGProcessor: ObservableObject {
             operation()
         }
 
-        let timerTasks = magicMessages.map { delayNanos, magicMsg in
-            Task { @MainActor [currentFeedbackMode] in
-                try? await Task.sleep(nanoseconds: delayNanos)
-                if !Task.isCancelled && currentFeedbackMode == .progressBar {
-                    ProgressWindowController.shared.update(message: magicMsg, progress: progress)
-                    DiagnosticLogger.shared.diagnostic("📝 \(magicMsg) (\(Int(progress * 100))%)")
-                }
-            }
-        }
+        let timerTask = startMagicFallbackTimer(progress: progress)
+        defer { timerTask.cancel() }
 
-        let result = await operationTask.value
-        timerTasks.forEach { $0.cancel() }
-        return result
+        return await operationTask.value
     }
 
     private func sendNotification(title: String, message: String) async {
@@ -379,6 +396,7 @@ class DMGProcessor: ObservableObject {
 
     private func processNextDMG(at url: URL) async {
         let currentDMGName = url.lastPathComponent
+        resetMagicMessageSession()
         diagnostic("processNextDMG started path=\(url.path)")
         support(event: "dmg_begin", details: ["dmg": currentDMGName])
 

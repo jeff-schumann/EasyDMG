@@ -15,6 +15,7 @@ DerivedData/
 *.perspectivev3
 !default.perspectivev3
 xcuserdata/
+.history/
 
 ## Other
 *.moved-aside
@@ -57,4 +58,3 @@ Temporary Items
 exportOptions.plist
 AGENTS.md
 release_guide.md
-
