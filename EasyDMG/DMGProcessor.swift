@@ -1076,12 +1076,14 @@ class DMGProcessor: ObservableObject {
         }
 
         ProgressWindowController.shared.hide()
+        let didOpenApp = await openInstalledAppIfNeeded(at: destinationPath)
         diagnostic("✅ Processing complete for \(resolvedAppName)")
         recordCompletion(
             dmgName: dmgName,
             outcome: "installed",
             details: [
                 "app": resolvedAppName,
+                "opened_app": boolString(didOpenApp),
                 "trashed_dmg": boolString(didTrashDMG)
             ]
         )
@@ -1323,6 +1325,37 @@ class DMGProcessor: ObservableObject {
     private func revealInFinder(path: String) {
         diagnostic("Revealing app in Finder: \(path)")
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "/Applications")
+    }
+
+    private func openInstalledAppIfNeeded(at path: String) async -> Bool {
+        guard UserPreferences.shared.openAppAfterInstall else { return false }
+
+        diagnostic("Opening installed app: \(path)")
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        return await withCheckedContinuation { continuation in
+            NSWorkspace.shared.openApplication(
+                at: URL(fileURLWithPath: path),
+                configuration: configuration
+            ) { _, error in
+                if let error {
+                    let nsError = error as NSError
+                    DiagnosticLogger.shared.diagnostic("❌ Failed to open installed app: \(error)")
+                    DiagnosticLogger.shared.support(
+                        event: "open_installed_app_error",
+                        details: [
+                            "error_code": String(nsError.code),
+                            "error_domain": nsError.domain
+                        ]
+                    )
+                    continuation.resume(returning: false)
+                } else {
+                    continuation.resume(returning: true)
+                }
+            }
+        }
     }
 
     private func handleError(_ message: String) async {

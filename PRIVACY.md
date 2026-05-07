@@ -71,7 +71,7 @@ EasyDMG performs very limited network activity.
 
 EasyDMG uses Sparkle to check for app updates. In the current version, EasyDMG is configured to check an appcast feed hosted at:
 
-`https://raw.githubusercontent.com/jefe-johann/EasyDMG/main/appcast.xml`
+`https://raw.githubusercontent.com/jeff-schumann/EasyDMG/main/appcast.xml`
 
 If an update is available, the update package may be downloaded from GitHub Releases.
 
@@ -134,4 +134,4 @@ This Privacy Policy may be updated from time to time to reflect product changes,
 
 For privacy questions or requests related to EasyDMG, please use the project's GitHub issue tracker:
 
-https://github.com/jefe-johann/EasyDMG/issues
+https://github.com/jeff-schumann/EasyDMG/issues

@@ -319,6 +319,11 @@ struct AboutTabView: View {
                     .buttonStyle(AmberOutlineButtonStyle(theme: theme))
                 }
                 .padding(.top, 4)
+
+                Button("Support Development :)") {
+                    NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/jeff.schumann")!)
+                }
+                .buttonStyle(AmberOutlineButtonStyle(theme: theme))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
@@ -348,6 +353,9 @@ struct SettingsTabView: View {
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     Toggle("Reveal app in Finder after installation", isOn: $preferences.revealInFinder)
+                        .toggleStyle(SettingsCheckboxStyle(theme: theme))
+
+                    Toggle("Open app after installation", isOn: $preferences.openAppAfterInstall)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -653,6 +661,10 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(revealInFinder, forKey: "revealInFinder") }
     }
 
+    @Published var openAppAfterInstall: Bool {
+        didSet { UserDefaults.standard.set(openAppAfterInstall, forKey: "openAppAfterInstall") }
+    }
+
     @Published var feedbackMode: FeedbackMode {
         didSet { UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode") }
     }
@@ -660,6 +672,7 @@ class UserPreferences: ObservableObject {
     private init() {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
+        self.openAppAfterInstall = UserDefaults.standard.object(forKey: "openAppAfterInstall") as? Bool ?? false
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar

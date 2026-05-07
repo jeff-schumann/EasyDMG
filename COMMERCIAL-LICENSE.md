@@ -32,7 +32,7 @@ If you wish to use EasyDMG in a proprietary product without GPL-3.0 restrictions
 
 **Contact for pricing:**
 - Email: jeffschumann.dev@gmail.com
-- GitHub: https://github.com/jefe-johann/EasyDMG/issues
+- GitHub: https://github.com/jeff-schumann/EasyDMG/issues
 
 Pricing is based on:
 - Number of developers

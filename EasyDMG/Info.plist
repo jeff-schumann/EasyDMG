@@ -45,7 +45,7 @@
 	<!-- Sparkle Updates Configuration -->
 	<!-- TODO: Set SUFeedURL to your appcast URL when ready to deploy -->
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/jefe-johann/EasyDMG/main/appcast.xml</string>
+	<string>https://raw.githubusercontent.com/jeff-schumann/EasyDMG/main/appcast.xml</string>
 
 	<!-- TODO: Replace with your Ed25519 public key after generating with generate_keys tool -->
 	<key>SUPublicEDKey</key>

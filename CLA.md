@@ -75,7 +75,7 @@ This is a common practice for dual-licensed open source projects.
 ## Questions?
 
 If you have questions about this CLA, please:
-- Open an issue: https://github.com/jefe-johann/EasyDMG/issues
+- Open an issue: https://github.com/jeff-schumann/EasyDMG/issues
 - Contact: jeffschumann.dev@gmail.com
 
 ## Small Contributions Exception

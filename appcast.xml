@@ -26,7 +26,7 @@
             <sparkle:version>7</sparkle:version>
             <sparkle:shortVersionString>1.1.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.1.1/EasyDMG_v1.1.1.dmg" length="3944704" type="application/octet-stream" sparkle:edSignature="yHOnxQJYhbf7mUagWS5G5Ra3jDoTfF896VFAgH+gd5CH8vtMvF/gyYGerLBTcW8+HesF6YgZqanOvr8H4PjrBg=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.1.1/EasyDMG_v1.1.1.dmg" length="3944704" type="application/octet-stream" sparkle:edSignature="yHOnxQJYhbf7mUagWS5G5Ra3jDoTfF896VFAgH+gd5CH8vtMvF/gyYGerLBTcW8+HesF6YgZqanOvr8H4PjrBg=="/>
         </item>
         <item>
             <title>1.1.0</title>
@@ -34,7 +34,7 @@
             <sparkle:version>6</sparkle:version>
             <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.1.0/EasyDMG_v1.1.0.dmg" length="3056862" type="application/octet-stream" sparkle:edSignature="q/VNHhRhFEBK3BneRnqIVHLMuqA9ZvrUAKiLEEHoFMU6VtFaAXGYBxUXBBe+XknOikWH3avUOiUgd9nFuYMyCQ=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.1.0/EasyDMG_v1.1.0.dmg" length="3056862" type="application/octet-stream" sparkle:edSignature="q/VNHhRhFEBK3BneRnqIVHLMuqA9ZvrUAKiLEEHoFMU6VtFaAXGYBxUXBBe+XknOikWH3avUOiUgd9nFuYMyCQ=="/>
         </item>
         <item>
             <title>1.0.4</title>
@@ -42,7 +42,7 @@
             <sparkle:version>5</sparkle:version>
             <sparkle:shortVersionString>1.0.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.0.4/EasyDMG_v1.0.4.dmg" length="3040945" type="application/octet-stream" sparkle:edSignature="A8MVD4m1at6a6j7TcIpbuNBFKt/vLOAC+mhyDkCw0voqRpOdewPbu3I83pecf/hZLzSIyYSFnQLBg302BaRdCw=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.0.4/EasyDMG_v1.0.4.dmg" length="3040945" type="application/octet-stream" sparkle:edSignature="A8MVD4m1at6a6j7TcIpbuNBFKt/vLOAC+mhyDkCw0voqRpOdewPbu3I83pecf/hZLzSIyYSFnQLBg302BaRdCw=="/>
         </item>
         <item>
             <title>1.0.3</title>
@@ -50,7 +50,7 @@
             <sparkle:version>4</sparkle:version>
             <sparkle:shortVersionString>1.0.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.0.3/EasyDMG_v1.0.3.dmg" length="2651695" type="application/octet-stream" sparkle:edSignature="9VZxLXGHvHF5EnYZZVBLfPKQm1iWV42pR3o3aGgicsV28EvJp6DqmRQopZ17iMkw2bxbMAdCP1poFYSWkdfhCw=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.0.3/EasyDMG_v1.0.3.dmg" length="2651695" type="application/octet-stream" sparkle:edSignature="9VZxLXGHvHF5EnYZZVBLfPKQm1iWV42pR3o3aGgicsV28EvJp6DqmRQopZ17iMkw2bxbMAdCP1poFYSWkdfhCw=="/>
         </item>
         <item>
             <title>1.0.2</title>
@@ -58,7 +58,7 @@
             <sparkle:version>3</sparkle:version>
             <sparkle:shortVersionString>1.0.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.0.2/EasyDMG_v1.0.2.dmg" length="2647437" type="application/octet-stream" sparkle:edSignature="Ln2aoc2HauAp9faTRrKvTWrpGOmYKS2jIODPE/96BAQb0e9/eEVNkrim/LVW70GntIykxUML6olyS5o8lK82CQ=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.0.2/EasyDMG_v1.0.2.dmg" length="2647437" type="application/octet-stream" sparkle:edSignature="Ln2aoc2HauAp9faTRrKvTWrpGOmYKS2jIODPE/96BAQb0e9/eEVNkrim/LVW70GntIykxUML6olyS5o8lK82CQ=="/>
         </item>
         <item>
             <title>1.0.1</title>
@@ -66,7 +66,7 @@
             <sparkle:version>2</sparkle:version>
             <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.0.1/EasyDMG_v1.0.1.dmg" length="3403428" type="application/octet-stream" sparkle:edSignature="u8dhq/loiaQ9LNn6ks/ImxzfWV5vy2e18I2mjZav5aKvUIqJ5n+mbHtVldXwbOyC1T9wsBb1SUuABX4oj1l+Ag=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.0.1/EasyDMG_v1.0.1.dmg" length="3403428" type="application/octet-stream" sparkle:edSignature="u8dhq/loiaQ9LNn6ks/ImxzfWV5vy2e18I2mjZav5aKvUIqJ5n+mbHtVldXwbOyC1T9wsBb1SUuABX4oj1l+Ag=="/>
         </item>
         <item>
             <title>1.0.0</title>
@@ -74,7 +74,7 @@
             <sparkle:version>1</sparkle:version>
             <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.6</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/jefe-johann/EasyDMG/releases/download/v1.0.0/EasyDMG_Setup.dmg" length="3547893" type="application/octet-stream" sparkle:edSignature="NGlWf9b++y7WOyUwF8X32u0skncz+EZCiBOLZO/hQX4xFIrKlA1dSzSCy7HC1vwgDB0yw9Ieussezk03QBBWAg=="/>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v1.0.0/EasyDMG_Setup.dmg" length="3547893" type="application/octet-stream" sparkle:edSignature="NGlWf9b++y7WOyUwF8X32u0skncz+EZCiBOLZO/hQX4xFIrKlA1dSzSCy7HC1vwgDB0yw9Ieussezk03QBBWAg=="/>
         </item>
     </channel>
 </rss>
