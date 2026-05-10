@@ -11,6 +11,14 @@ import AppKit
 import Combine
 import UserNotifications
 
+fileprivate extension String {
+    /// Strips a trailing `.app` for display in user-facing copy.
+    /// Use only for presentation — filesystem paths must keep the suffix.
+    var strippingAppSuffix: String {
+        hasSuffix(".app") ? String(dropLast(4)) : self
+    }
+}
+
 fileprivate enum AppManagementDecision {
     case retry
     case cancel
@@ -139,8 +147,7 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
         titleLabel.textColor = .labelColor
         titleLabel.alignment = .center
 
-        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
-        let subtitleLabel = NSTextField(labelWithString: "to replace \(displayName)")
+        let subtitleLabel = NSTextField(labelWithString: "to replace \(appName.strippingAppSuffix)")
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         subtitleLabel.font = .systemFont(ofSize: 13)
         subtitleLabel.textColor = .secondaryLabelColor
@@ -1244,12 +1251,9 @@ class DMGProcessor: ObservableObject {
                 )
 
                 if currentFeedbackMode == .notification && didTrashDMG {
-                    let notifyName = resolvedAppName.hasSuffix(".app")
-                        ? String(resolvedAppName.dropLast(4))
-                        : resolvedAppName
                     await sendNotification(
                         title: "EasyDMG",
-                        message: "\(notifyName) install canceled; disk image moved to Trash"
+                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
                     )
                 }
 
@@ -1288,7 +1292,7 @@ class DMGProcessor: ObservableObject {
                 dmgName: dmgName
             )
             if !hasPermission {
-                diagnostic("Installation cancelled at App Management permission prompt for \(resolvedAppName)")
+                diagnostic("Installation canceled at App Management permission prompt for \(resolvedAppName)")
                 let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
@@ -1299,7 +1303,7 @@ class DMGProcessor: ObservableObject {
                 if currentFeedbackMode == .notification && didTrashDMG {
                     await sendNotification(
                         title: "EasyDMG",
-                        message: "\(resolvedAppName) install cancelled; disk image moved to Trash"
+                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
                     )
                 }
 
@@ -1330,7 +1334,7 @@ class DMGProcessor: ObservableObject {
                 dmgName: dmgName
             )
             if !canProceed {
-                diagnostic("Installation cancelled at running-app prompt for \(resolvedAppName)")
+                diagnostic("Installation canceled at running-app prompt for \(resolvedAppName)")
                 let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
@@ -1341,7 +1345,7 @@ class DMGProcessor: ObservableObject {
                 if currentFeedbackMode == .notification && didTrashDMG {
                     await sendNotification(
                         title: "EasyDMG",
-                        message: "\(resolvedAppName) install cancelled; disk image moved to Trash"
+                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
                     )
                 }
 
@@ -1351,7 +1355,7 @@ class DMGProcessor: ObservableObject {
                     outcome: "skipped",
                     details: [
                         "app": resolvedAppName,
-                        "reason": "running_app_cancelled",
+                        "reason": "running_app_canceled",
                         "trashed_dmg": boolString(didTrashDMG)
                     ]
                 )
@@ -1434,7 +1438,7 @@ class DMGProcessor: ObservableObject {
             )
 
             if currentFeedbackMode == .notification {
-                await sendNotification(title: "EasyDMG", message: "\(resolvedAppName) installed successfully")
+                await sendNotification(title: "EasyDMG", message: "\(resolvedAppName.strippingAppSuffix) installed successfully")
             }
         } catch {
             diagnostic("Installation failed while copying/replacing: \(error)")
@@ -1506,19 +1510,19 @@ class DMGProcessor: ObservableObject {
         installedVersion: String?,
         newVersion: String?
     ) async -> Bool {
-        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
+        let displayName = appName.strippingAppSuffix
         let informative: String
         if let installed = installedVersion, let new = newVersion {
             switch installed.compare(new, options: .numeric) {
             case .orderedSame:
-                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains the same version."
+                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains the same version.\n\nWould you like to replace it anyway?"
             case .orderedAscending:
-                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains a newer version (v\(new))."
+                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains a newer version (v\(new)).\n\nWould you like to update the app?"
             case .orderedDescending:
-                informative = "\(displayName) is already installed (v\(installed)), which is newer than the version in this DMG (v\(new))."
+                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains an older version (v\(new)).\n\nWould you like to replace it anyway?"
             }
         } else {
-            informative = "\(displayName) is already installed."
+            informative = "\(displayName) is already installed.\n\nWould you like to replace it?"
         }
 
         return await withCheckedContinuation { continuation in
@@ -1589,7 +1593,7 @@ class DMGProcessor: ObservableObject {
     }
 
     private func showQuitRunningAppDialog(appName: String) async -> Bool {
-        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
+        let displayName = appName.strippingAppSuffix
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
@@ -1612,7 +1616,7 @@ class DMGProcessor: ObservableObject {
     }
 
     private func showQuitFailedDialog(appName: String) async -> Bool {
-        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
+        let displayName = appName.strippingAppSuffix
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
