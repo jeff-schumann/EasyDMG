@@ -46,7 +46,7 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
         self.completion = completion
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 285),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 340),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -139,32 +139,43 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
         titleLabel.textColor = .labelColor
         titleLabel.alignment = .center
 
-        let bodyLabel = NSTextField(labelWithString: "To replace \(appName), allow EasyDMG to modify apps in System Settings.\n\nWhen macOS asks, choose Later or Quit & Reopen. EasyDMG will continue automatically once permission is ready.")
-        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-        bodyLabel.font = .systemFont(ofSize: 13)
-        bodyLabel.textColor = .labelColor
-        bodyLabel.alignment = .center
-        bodyLabel.lineBreakMode = .byWordWrapping
-        bodyLabel.maximumNumberOfLines = 0
+        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
+        let subtitleLabel = NSTextField(labelWithString: "to replace \(displayName)")
+        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        subtitleLabel.font = .systemFont(ofSize: 13)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.alignment = .center
+        subtitleLabel.lineBreakMode = .byTruncatingMiddle
+        subtitleLabel.maximumNumberOfLines = 1
+
+        let stepsLabel = NSTextField(wrappingLabelWithString: "")
+        stepsLabel.translatesAutoresizingMaskIntoConstraints = false
+        stepsLabel.attributedStringValue = Self.makeStepsAttributedString()
+        stepsLabel.lineBreakMode = .byWordWrapping
+        stepsLabel.maximumNumberOfLines = 0
+        stepsLabel.isSelectable = false
+        stepsLabel.drawsBackground = false
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.font = .systemFont(ofSize: 11)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.alignment = .center
         statusLabel.lineBreakMode = .byWordWrapping
         statusLabel.maximumNumberOfLines = 0
 
-        let textStack = NSStackView(views: [titleLabel, bodyLabel, statusLabel])
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-        textStack.orientation = .vertical
-        textStack.alignment = .centerX
-        textStack.spacing = 8
+        let headerStack = NSStackView(views: [titleLabel, subtitleLabel])
+        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        headerStack.orientation = .vertical
+        headerStack.alignment = .centerX
+        headerStack.spacing = 4
 
-        let contentStack = NSStackView(views: [iconView, textStack])
+        let contentStack = NSStackView(views: [iconView, headerStack, stepsLabel, statusLabel])
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.orientation = .vertical
         contentStack.alignment = .centerX
-        contentStack.spacing = 14
+        contentStack.spacing = 16
+        contentStack.setCustomSpacing(20, after: headerStack)
+        contentStack.setCustomSpacing(18, after: stepsLabel)
 
         openSettingsButton.target = self
         openSettingsButton.action = #selector(openSettingsClicked)
@@ -206,9 +217,44 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
             buttonStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20),
 
             titleLabel.widthAnchor.constraint(equalToConstant: 410),
-            bodyLabel.widthAnchor.constraint(equalToConstant: 410),
+            subtitleLabel.widthAnchor.constraint(equalToConstant: 410),
+            stepsLabel.widthAnchor.constraint(equalToConstant: 380),
             statusLabel.widthAnchor.constraint(equalToConstant: 410)
         ])
+    }
+
+    private static func makeStepsAttributedString() -> NSAttributedString {
+        let steps = [
+            "Click Open System Settings.",
+            "Enable EasyDMG under App Management.",
+            "If macOS asks to quit EasyDMG, choose Quit & Reopen — installation continues automatically."
+        ]
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacing = 6
+        paragraph.headIndent = 22
+        paragraph.firstLineHeadIndent = 0
+        paragraph.lineBreakMode = .byWordWrapping
+
+        let result = NSMutableAttributedString()
+        let numberFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let textFont = NSFont.systemFont(ofSize: 13)
+
+        for (index, step) in steps.enumerated() {
+            let isLast = index == steps.count - 1
+            result.append(NSAttributedString(string: "\(index + 1).  ", attributes: [
+                .font: numberFont,
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph
+            ]))
+            result.append(NSAttributedString(string: step + (isLast ? "" : "\n"), attributes: [
+                .font: textFont,
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph
+            ]))
+        }
+
+        return result
     }
 
     private func markPermissionReady(reason: String) {
@@ -1176,13 +1222,19 @@ class DMGProcessor: ObservableObject {
         if FileManager.default.fileExists(atPath: destinationPath) {
             diagnostic("Destination app already exists: \(destinationPath)")
             support(event: "destination_exists", details: ["app": resolvedAppName, "dmg": dmgName])
-            let shouldReplace = await showSkipReplaceDialog(appName: resolvedAppName)
+            let installedVersion = appVersion(at: destinationPath)
+            let newVersion = appVersion(at: appPath)
+            let shouldReplace = await showSkipReplaceDialog(
+                appName: resolvedAppName,
+                installedVersion: installedVersion,
+                newVersion: newVersion
+            )
 
             if !shouldReplace {
-                diagnostic("Installation skipped by user")
+                diagnostic("Installation canceled by user")
                 support(
                     event: "install_decision",
-                    details: ["action": "skip", "app": resolvedAppName, "dmg": dmgName]
+                    details: ["action": "cancel", "app": resolvedAppName, "dmg": dmgName]
                 )
                 let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
@@ -1192,16 +1244,19 @@ class DMGProcessor: ObservableObject {
                 )
 
                 if currentFeedbackMode == .notification && didTrashDMG {
+                    let notifyName = resolvedAppName.hasSuffix(".app")
+                        ? String(resolvedAppName.dropLast(4))
+                        : resolvedAppName
                     await sendNotification(
                         title: "EasyDMG",
-                        message: "\(resolvedAppName) was skipped; disk image moved to Trash"
+                        message: "\(notifyName) install canceled; disk image moved to Trash"
                     )
                 }
 
                 ProgressWindowController.shared.hide()
                 recordCompletion(
                     dmgName: dmgName,
-                    outcome: "skipped",
+                    outcome: "canceled",
                     details: [
                         "app": resolvedAppName,
                         "trashed_dmg": boolString(didTrashDMG)
@@ -1446,13 +1501,32 @@ class DMGProcessor: ObservableObject {
         )
     }
 
-    private func showSkipReplaceDialog(appName: String) async -> Bool {
+    private func showSkipReplaceDialog(
+        appName: String,
+        installedVersion: String?,
+        newVersion: String?
+    ) async -> Bool {
+        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
+        let informative: String
+        if let installed = installedVersion, let new = newVersion {
+            switch installed.compare(new, options: .numeric) {
+            case .orderedSame:
+                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains the same version."
+            case .orderedAscending:
+                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains a newer version (v\(new))."
+            case .orderedDescending:
+                informative = "\(displayName) is already installed (v\(installed)), which is newer than the version in this DMG (v\(new))."
+            }
+        } else {
+            informative = "\(displayName) is already installed."
+        }
+
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
                 alert.messageText = "EasyDMG"
-                alert.informativeText = "\(appName) already exists in Applications.\n\nWhat would you like to do?"
+                alert.informativeText = informative
 
                 if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
                    let icon = NSImage(contentsOfFile: iconPath) {
@@ -1460,12 +1534,24 @@ class DMGProcessor: ObservableObject {
                 }
 
                 alert.addButton(withTitle: "Replace")
-                alert.addButton(withTitle: "Skip")
+                alert.addButton(withTitle: "Cancel")
 
                 let response = alert.runModal()
                 continuation.resume(returning: response == .alertFirstButtonReturn)
             }
         }
+    }
+
+    private func appVersion(at appPath: String) -> String? {
+        let infoPlistURL = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: infoPlistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let info = plist as? [String: Any],
+              let version = info["CFBundleShortVersionString"] as? String,
+              !version.isEmpty else {
+            return nil
+        }
+        return version
     }
 
     private func bundleIdentifier(at appPath: String) -> String? {
@@ -1503,12 +1589,13 @@ class DMGProcessor: ObservableObject {
     }
 
     private func showQuitRunningAppDialog(appName: String) async -> Bool {
+        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
                 alert.messageText = "EasyDMG"
-                alert.informativeText = "\(appName) is currently running.\n\nQuit it and continue with installation?"
+                alert.informativeText = "\(displayName) is currently running.\n\nQuit and install the new version?"
 
                 if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
                    let icon = NSImage(contentsOfFile: iconPath) {
@@ -1525,12 +1612,13 @@ class DMGProcessor: ObservableObject {
     }
 
     private func showQuitFailedDialog(appName: String) async -> Bool {
+        let displayName = appName.hasSuffix(".app") ? String(appName.dropLast(4)) : appName
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .warning
                 alert.messageText = "EasyDMG"
-                alert.informativeText = "\(appName) didn't quit. It may have unsaved work or an open dialog.\n\nClose it manually, then try again."
+                alert.informativeText = "\(displayName) didn't quit. It may have unsaved work or an open dialog.\n\nClose it manually, then try again."
 
                 if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
                    let icon = NSImage(contentsOfFile: iconPath) {
