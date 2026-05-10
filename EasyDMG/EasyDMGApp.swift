@@ -217,7 +217,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         return !launchedWithFiles && !dmgProcessor.isProcessing
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if shouldSuppressSettingsWindow {
+            hideSettingsWindow()
+        }
+        dmgProcessor.refreshAppManagementPermissionPanel()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if dmgProcessor.handleAppManagementTerminationRequest() {
+            hideSettingsWindow()
+            diagnostic("⚠️ Cancelling termination after App Management restart request")
+            support(event: "termination_decision", details: ["action": "cancel", "reason": "app_management_restart_request"])
+            return .terminateCancel
+        }
+
         // Prevent quit while actively processing
         if dmgProcessor.isProcessing {
             diagnostic("⚠️ Still processing, preventing quit")
@@ -237,11 +251,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         return .terminateNow
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if shouldSuppressSettingsWindow {
+            hideSettingsWindow()
+            dmgProcessor.refreshAppManagementPermissionPanel()
+            return false
+        }
+
+        return true
+    }
+
+    private var shouldSuppressSettingsWindow: Bool {
+        launchedWithFiles || dmgProcessor.isProcessing
+    }
+
     private func hideSettingsWindow() {
         // Only hide settings windows, not the progress window
         for window in NSApp.windows {
             // Don't hide the progress window (it has .floating level)
-            if window.level != .floating {
+            // Don't hide transient install/permission windows either.
+            if window.level != .floating &&
+                window.identifier?.rawValue != "AppManagementPermissionWindow" {
                 window.orderOut(nil)
             }
         }

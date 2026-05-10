@@ -11,6 +11,249 @@ import AppKit
 import Combine
 import UserNotifications
 
+fileprivate enum AppManagementDecision {
+    case retry
+    case cancel
+}
+
+@MainActor
+fileprivate final class AppManagementPermissionWindowController: NSWindowController, NSWindowDelegate {
+    private let appName: String
+    private let permissionProbe: () -> Bool
+    private let openSettings: () -> Void
+    private let permissionReady: (String) -> Void
+    private let completion: (AppManagementDecision) -> Void
+
+    private let statusLabel = NSTextField(labelWithString: "Waiting for App Management permission.")
+    private let openSettingsButton = NSButton(title: "Open System Settings", target: nil, action: nil)
+    private let tryAgainButton = NSButton(title: "Try Again", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+
+    private var didFinish = false
+    private var isPermissionReady = false
+
+    init(
+        appName: String,
+        permissionProbe: @escaping () -> Bool,
+        openSettings: @escaping () -> Void,
+        permissionReady: @escaping (String) -> Void,
+        completion: @escaping (AppManagementDecision) -> Void
+    ) {
+        self.appName = appName
+        self.permissionProbe = permissionProbe
+        self.openSettings = openSettings
+        self.permissionReady = permissionReady
+        self.completion = completion
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 285),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        panel.title = "EasyDMG"
+        panel.identifier = NSUserInterfaceItemIdentifier("AppManagementPermissionWindow")
+        panel.isFloatingPanel = false
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.level = .normal
+
+        super.init(window: panel)
+
+        panel.delegate = self
+        buildContent()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func present() {
+        guard let window else { return }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func handleSystemSettingsRestartRequest() {
+        if continueIfPermissionReady(reason: "system_settings_restart") {
+            return
+        } else {
+            statusLabel.stringValue = "EasyDMG noticed the restart request, but permission is not available yet. Try again in a moment."
+        }
+        present()
+    }
+
+    @discardableResult
+    func continueIfPermissionReady(reason: String) -> Bool {
+        if refreshPermissionStatus(reason: reason) {
+            finish(.retry)
+            return true
+        }
+
+        return false
+    }
+
+    @discardableResult
+    func refreshPermissionStatus(reason: String) -> Bool {
+        guard !didFinish else { return false }
+
+        if permissionProbe() {
+            markPermissionReady(reason: reason)
+            return true
+        } else if isPermissionReady {
+            isPermissionReady = false
+            statusLabel.stringValue = "Waiting for App Management permission."
+            tryAgainButton.title = "Try Again"
+            tryAgainButton.keyEquivalent = ""
+            tryAgainButton.bezelColor = nil
+            openSettingsButton.keyEquivalent = "\r"
+            openSettingsButton.bezelColor = .controlAccentColor
+        }
+
+        return false
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        finish(.cancel)
+        return false
+    }
+
+    private func buildContent() {
+        guard let window else { return }
+
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        window.contentView = contentView
+
+        let iconView = NSImageView()
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.image = Bundle.main.path(forResource: "wizardhamster", ofType: "icns")
+            .flatMap { NSImage(contentsOfFile: $0) }
+            ?? NSApp.applicationIconImage
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+
+        let titleLabel = NSTextField(labelWithString: "EasyDMG needs permission")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .boldSystemFont(ofSize: 17)
+        titleLabel.textColor = .labelColor
+        titleLabel.alignment = .center
+
+        let bodyLabel = NSTextField(labelWithString: "To replace \(appName), allow EasyDMG to modify apps in System Settings.\n\nWhen macOS asks, choose Later or Quit & Reopen. EasyDMG will continue automatically once permission is ready.")
+        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
+        bodyLabel.font = .systemFont(ofSize: 13)
+        bodyLabel.textColor = .labelColor
+        bodyLabel.alignment = .center
+        bodyLabel.lineBreakMode = .byWordWrapping
+        bodyLabel.maximumNumberOfLines = 0
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .systemFont(ofSize: 12)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.alignment = .center
+        statusLabel.lineBreakMode = .byWordWrapping
+        statusLabel.maximumNumberOfLines = 0
+
+        let textStack = NSStackView(views: [titleLabel, bodyLabel, statusLabel])
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.orientation = .vertical
+        textStack.alignment = .centerX
+        textStack.spacing = 8
+
+        let contentStack = NSStackView(views: [iconView, textStack])
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.orientation = .vertical
+        contentStack.alignment = .centerX
+        contentStack.spacing = 14
+
+        openSettingsButton.target = self
+        openSettingsButton.action = #selector(openSettingsClicked)
+        openSettingsButton.bezelStyle = .rounded
+        openSettingsButton.controlSize = .large
+        openSettingsButton.keyEquivalent = "\r"
+        openSettingsButton.bezelColor = .controlAccentColor
+
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelClicked)
+        cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
+
+        tryAgainButton.target = self
+        tryAgainButton.action = #selector(tryAgainClicked)
+        tryAgainButton.bezelStyle = .rounded
+        tryAgainButton.keyEquivalent = ""
+
+        let buttonStack = NSStackView(views: [openSettingsButton, cancelButton, tryAgainButton])
+        buttonStack.translatesAutoresizingMaskIntoConstraints = false
+        buttonStack.orientation = .horizontal
+        buttonStack.alignment = .centerY
+        buttonStack.spacing = 8
+
+        contentView.addSubview(contentStack)
+        contentView.addSubview(buttonStack)
+
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 64),
+            iconView.heightAnchor.constraint(equalToConstant: 64),
+
+            contentStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
+            contentStack.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 32),
+            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -32),
+
+            buttonStack.topAnchor.constraint(greaterThanOrEqualTo: contentStack.bottomAnchor, constant: 20),
+            buttonStack.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            buttonStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -20),
+
+            titleLabel.widthAnchor.constraint(equalToConstant: 410),
+            bodyLabel.widthAnchor.constraint(equalToConstant: 410),
+            statusLabel.widthAnchor.constraint(equalToConstant: 410)
+        ])
+    }
+
+    private func markPermissionReady(reason: String) {
+        guard !isPermissionReady else { return }
+
+        isPermissionReady = true
+        statusLabel.stringValue = "Permission granted. Continuing..."
+        tryAgainButton.title = "Continue"
+        tryAgainButton.keyEquivalent = "\r"
+        tryAgainButton.bezelColor = .controlAccentColor
+        openSettingsButton.keyEquivalent = ""
+        openSettingsButton.bezelColor = nil
+        permissionReady(reason)
+    }
+
+    private func finish(_ decision: AppManagementDecision) {
+        guard !didFinish else { return }
+
+        didFinish = true
+        window?.delegate = nil
+        window?.close()
+        completion(decision)
+    }
+
+    @objc private func openSettingsClicked() {
+        openSettings()
+        statusLabel.stringValue = "Waiting for permission..."
+        NSApp.deactivate()
+    }
+
+    @objc private func tryAgainClicked() {
+        if permissionProbe() {
+            markPermissionReady(reason: "try_again")
+            finish(.retry)
+        } else {
+            statusLabel.stringValue = "Still waiting for permission. Enable EasyDMG in System Settings, then try again."
+            NSSound.beep()
+        }
+    }
+
+    @objc private func cancelClicked() {
+        finish(.cancel)
+    }
+}
+
 @MainActor
 class DMGProcessor: ObservableObject {
     private enum ManualFallbackReason: String, Sendable {
@@ -110,6 +353,8 @@ class DMGProcessor: ObservableObject {
     private var currentFeedbackMode: FeedbackMode = .progressBar
     private var pendingDMGURLs: [URL] = []
     private var isDrainingQueue = false
+    private var appManagementPermissionWindowController: AppManagementPermissionWindowController?
+    private var didHandleAppManagementRestartRequest = false
     private var usedMagicMessages = Set<String>()
 
     // Progressive messages shown if an operation takes too long.
@@ -379,6 +624,12 @@ class DMGProcessor: ObservableObject {
             let nextURL = pendingDMGURLs.removeFirst()
             diagnostic("Processing next DMG: \(nextURL.path); remaining after dequeue=\(pendingDMGURLs.count)")
             await processNextDMG(at: nextURL)
+        }
+
+        if didHandleAppManagementRestartRequest {
+            diagnostic("Waiting briefly before quit after App Management restart request")
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            didHandleAppManagementRestartRequest = false
         }
 
         isProcessing = false
@@ -971,6 +1222,50 @@ class DMGProcessor: ObservableObject {
             }
         }
 
+        // Pre-flight App Management TCC check before any destructive work — without this
+        // permission, replacing an existing bundle in /Applications fails mid-install and
+        // the user just sees a generic "install failed". Probe non-destructively first.
+        if shouldReplaceExistingApp {
+            showProgress("Waiting for App Management permission...", progress: 0.2)
+            let hasPermission = await ensureAppManagementPermission(
+                forExistingAppAt: destinationPath,
+                appName: resolvedAppName,
+                dmgName: dmgName
+            )
+            if !hasPermission {
+                diagnostic("Installation cancelled at App Management permission prompt for \(resolvedAppName)")
+                let didTrashDMG = await unmountAndCleanup(
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath,
+                    dmgName: dmgName,
+                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
+                )
+
+                if currentFeedbackMode == .notification && didTrashDMG {
+                    await sendNotification(
+                        title: "EasyDMG",
+                        message: "\(resolvedAppName) install cancelled; disk image moved to Trash"
+                    )
+                }
+
+                ProgressWindowController.shared.hide()
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "skipped",
+                    details: [
+                        "app": resolvedAppName,
+                        "reason": "app_management_denied",
+                        "trashed_dmg": boolString(didTrashDMG)
+                    ]
+                )
+                return
+            }
+
+            if currentFeedbackMode == .progressBar {
+                ProgressWindowController.shared.show(message: "Preparing replacement...", progress: 0.2)
+            }
+        }
+
         // Quit any running instance before installing — otherwise the OS keeps the running
         // process bound to the old bundle and "Open after install" activates the stale copy.
         if let bundleID = bundleIdentifier(at: appPath) {
@@ -1089,21 +1384,26 @@ class DMGProcessor: ObservableObject {
         } catch {
             diagnostic("Installation failed while copying/replacing: \(error)")
             cleanupStagedAppIfNeeded(at: stagedURL)
+            let permissionDenied = isAppManagementError(error)
+            let failureReason = permissionDenied ? "app_management_denied" : "copy_or_replace_failed"
             support(
                 event: "install_result",
                 details: errorDetails(error).merging([
                     "app": resolvedAppName,
                     "dmg": dmgName,
-                    "reason": "copy_or_replace_failed",
+                    "reason": failureReason,
                     "result": "failed"
                 ]) { current, _ in current }
             )
             recordCompletion(
                 dmgName: dmgName,
                 outcome: "error",
-                details: ["app": resolvedAppName, "reason": "copy_or_replace_failed"]
+                details: ["app": resolvedAppName, "reason": failureReason]
             )
-            await handleError("Installation failed")
+            let errorMessage = permissionDenied
+                ? "EasyDMG needs App Management permission. Open System Settings → Privacy & Security → App Management, enable EasyDMG, then try again."
+                : "Installation failed"
+            await handleError(errorMessage)
             _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.6)
             return
         }
@@ -1314,6 +1614,142 @@ class DMGProcessor: ObservableObject {
             instances = runningInstances(of: bundleID)
             if instances.isEmpty {
                 return true
+            }
+        }
+    }
+
+    // Probes App Management TCC by setting the existing bundle's modification date
+    // to its current value — a no-op write that still exercises the permission check.
+    private func canModifyExistingApp(at path: String) -> Bool {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            let originalDate = attrs[.modificationDate] as? Date ?? Date()
+            try FileManager.default.setAttributes(
+                [.modificationDate: originalDate],
+                ofItemAtPath: path
+            )
+            return true
+        } catch {
+            let nsError = error as NSError
+            diagnostic(
+                "App Management probe failed: domain=\(nsError.domain) code=\(nsError.code)"
+            )
+            return false
+        }
+    }
+
+    private func isAppManagementError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain && nsError.code == 513 { return true }
+        if nsError.domain == NSPOSIXErrorDomain && nsError.code == 1 { return true }
+        return false
+    }
+
+    func handleAppManagementTerminationRequest() -> Bool {
+        guard let appManagementPermissionWindowController else {
+            return false
+        }
+
+        diagnostic("Treating termination request as App Management restart request")
+        didHandleAppManagementRestartRequest = true
+        appManagementPermissionWindowController.handleSystemSettingsRestartRequest()
+        return true
+    }
+
+    func refreshAppManagementPermissionPanel() {
+        appManagementPermissionWindowController?.continueIfPermissionReady(reason: "app_active")
+    }
+
+    private func showAppManagementPermissionDialog(
+        forExistingAppAt existingAppPath: String,
+        appName: String,
+        dmgName: String
+    ) async -> AppManagementDecision {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: .cancel)
+                    return
+                }
+
+                let controller = AppManagementPermissionWindowController(
+                    appName: appName,
+                    permissionProbe: { [weak self] in
+                        self?.canModifyExistingApp(at: existingAppPath) ?? false
+                    },
+                    openSettings: {
+                        DiagnosticLogger.shared.support(
+                            event: "app_management_open_settings",
+                            details: ["app": appName, "dmg": dmgName]
+                        )
+                        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles")!
+                        NSWorkspace.shared.open(url)
+                    },
+                    permissionReady: { reason in
+                        DiagnosticLogger.shared.diagnostic(
+                            "App Management permission ready via \(reason)"
+                        )
+                        DiagnosticLogger.shared.support(
+                            event: "app_management_permission_ready",
+                            details: ["app": appName, "dmg": dmgName, "reason": reason]
+                        )
+                    },
+                    completion: { [weak self] decision in
+                        if let self, self.appManagementPermissionWindowController != nil {
+                            self.appManagementPermissionWindowController = nil
+                        }
+                        continuation.resume(returning: decision)
+                    }
+                )
+                self.appManagementPermissionWindowController = controller
+                controller.present()
+            }
+        }
+    }
+
+    private func ensureAppManagementPermission(
+        forExistingAppAt path: String,
+        appName: String,
+        dmgName: String
+    ) async -> Bool {
+        while true {
+            if canModifyExistingApp(at: path) {
+                support(
+                    event: "app_management_probe",
+                    details: ["app": appName, "dmg": dmgName, "result": "granted"]
+                )
+                return true
+            }
+
+            support(
+                event: "app_management_probe",
+                details: ["app": appName, "dmg": dmgName, "result": "denied"]
+            )
+
+            let decision = await showAppManagementPermissionDialog(
+                forExistingAppAt: path,
+                appName: appName,
+                dmgName: dmgName
+            )
+            support(
+                event: "app_management_decision",
+                details: [
+                    "app": appName,
+                    "dmg": dmgName,
+                    "action": {
+                        switch decision {
+                        case .retry: return "retry"
+                        case .cancel: return "cancel"
+                        }
+                    }()
+                ]
+            )
+
+            switch decision {
+            case .retry:
+                continue
+            case .cancel:
+                return false
             }
         }
     }
