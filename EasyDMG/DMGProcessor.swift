@@ -376,6 +376,18 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private enum ReplacementVersionComparison {
+        case older
+        case same
+        case newer
+        case unknown
+    }
+
+    private struct ParsedAppVersion {
+        let components: [Int]
+        let prerelease: String?
+    }
+
     private enum ApplicationsFolderIssue: String {
         case missing = "applications_missing"
         case notDirectory = "applications_not_directory"
@@ -1231,11 +1243,31 @@ class DMGProcessor: ObservableObject {
             support(event: "destination_exists", details: ["app": resolvedAppName, "dmg": dmgName])
             let installedVersion = appVersion(at: destinationPath)
             let newVersion = appVersion(at: appPath)
-            let shouldReplace = await showSkipReplaceDialog(
-                appName: resolvedAppName,
+            let versionComparison = replacementVersionComparison(
                 installedVersion: installedVersion,
                 newVersion: newVersion
             )
+
+            let shouldReplace: Bool
+            if versionComparison == .newer && UserPreferences.shared.autoInstallNewerVersions {
+                diagnostic("Auto-installing newer version of \(resolvedAppName): v\(installedVersion ?? "?") -> v\(newVersion ?? "?")")
+                support(
+                    event: "auto_install_newer",
+                    details: [
+                        "app": resolvedAppName,
+                        "dmg": dmgName,
+                        "installed_version": installedVersion ?? "",
+                        "new_version": newVersion ?? ""
+                    ]
+                )
+                shouldReplace = true
+            } else {
+                shouldReplace = await showSkipReplaceDialog(
+                    appName: resolvedAppName,
+                    installedVersion: installedVersion,
+                    newVersion: newVersion
+                )
+            }
 
             if !shouldReplace {
                 diagnostic("Installation canceled by user")
@@ -1512,24 +1544,43 @@ class DMGProcessor: ObservableObject {
     ) async -> Bool {
         let displayName = appName.strippingAppSuffix
         let informative: String
-        if let installed = installedVersion, let new = newVersion {
-            switch installed.compare(new, options: .numeric) {
-            case .orderedSame:
-                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains the same version.\n\nWould you like to replace it anyway?"
-            case .orderedAscending:
-                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains a newer version (v\(new)).\n\nWould you like to update the app?"
-            case .orderedDescending:
-                informative = "\(displayName) is already installed (v\(installed)).\n\nThis DMG contains an older version (v\(new)).\n\nWould you like to replace it anyway?"
+        let comparison = replacementVersionComparison(
+            installedVersion: installedVersion,
+            newVersion: newVersion
+        )
+        if comparison != .unknown, let installed = installedVersion, let new = newVersion {
+            let installedDisplayVersion = dialogVersionText(from: installed)
+            let newDisplayVersion = dialogVersionText(from: new)
+            let comparisonText: String
+
+            switch comparison {
+            case .same:
+                comparisonText = "This appears to be the same version."
+            case .newer:
+                comparisonText = "This looks like a newer version."
+            case .older:
+                comparisonText = "This looks like an older version."
+            case .unknown:
+                comparisonText = ""
             }
+
+            informative = [
+                "\(displayName) is already installed in Applications.",
+                "",
+                "Installed: \(installedDisplayVersion)",
+                "New: \(newDisplayVersion)",
+                "",
+                comparisonText
+            ].joined(separator: "\n")
         } else {
-            informative = "\(displayName) is already installed.\n\nWould you like to replace it?"
+            informative = "\(displayName) is already installed in Applications."
         }
 
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
-                alert.messageText = "EasyDMG"
+                alert.messageText = "Replace \(displayName)?"
                 alert.informativeText = informative
 
                 if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
@@ -1537,13 +1588,172 @@ class DMGProcessor: ObservableObject {
                     alert.icon = icon
                 }
 
+                let suppressCheckbox: NSButton?
+                if comparison == .newer {
+                    let checkbox = NSButton(
+                        checkboxWithTitle: "Always install newer versions without asking",
+                        target: nil,
+                        action: nil
+                    )
+                    checkbox.state = .off
+                    checkbox.sizeToFit()
+                    alert.accessoryView = checkbox
+                    suppressCheckbox = checkbox
+                } else {
+                    suppressCheckbox = nil
+                }
+
                 alert.addButton(withTitle: "Replace")
                 alert.addButton(withTitle: "Cancel")
 
                 let response = alert.runModal()
-                continuation.resume(returning: response == .alertFirstButtonReturn)
+                let shouldReplace = response == .alertFirstButtonReturn
+
+                if shouldReplace, suppressCheckbox?.state == .on {
+                    UserPreferences.shared.autoInstallNewerVersions = true
+                    self.diagnostic("User enabled auto-install for newer versions via Replace dialog")
+                    self.support(
+                        event: "preference_change",
+                        details: [
+                            "preference": "autoInstallNewerVersions",
+                            "value": "true",
+                            "source": "replace_dialog_suppression"
+                        ]
+                    )
+                }
+
+                continuation.resume(returning: shouldReplace)
             }
         }
+    }
+
+    private func dialogVersionText(from version: String) -> String {
+        var displayVersion = version.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        while displayVersion.first == "v" || displayVersion.first == "V" {
+            displayVersion.removeFirst()
+        }
+
+        return displayVersion
+    }
+
+    private func replacementVersionComparison(
+        installedVersion: String?,
+        newVersion: String?
+    ) -> ReplacementVersionComparison {
+        guard let installed = parsedAppVersion(from: installedVersion),
+              let new = parsedAppVersion(from: newVersion) else {
+            return .unknown
+        }
+
+        let componentCount = max(installed.components.count, new.components.count)
+        for index in 0..<componentCount {
+            let installedComponent = index < installed.components.count ? installed.components[index] : 0
+            let newComponent = index < new.components.count ? new.components[index] : 0
+
+            if installedComponent < newComponent {
+                return .newer
+            }
+
+            if installedComponent > newComponent {
+                return .older
+            }
+        }
+
+        switch (installed.prerelease, new.prerelease) {
+        case (nil, nil):
+            return .same
+        case (nil, .some):
+            return .older
+        case (.some, nil):
+            return .newer
+        case let (installedPrerelease?, newPrerelease?):
+            switch comparePrerelease(installedPrerelease, newPrerelease) {
+            case .orderedAscending:
+                return .newer
+            case .orderedDescending:
+                return .older
+            case .orderedSame:
+                return .same
+            }
+        }
+    }
+
+    private func parsedAppVersion(from version: String?) -> ParsedAppVersion? {
+        guard var core = version?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !core.isEmpty else {
+            return nil
+        }
+
+        while core.first == "v" || core.first == "V" {
+            core.removeFirst()
+        }
+
+        if let metadataStart = core.firstIndex(of: "+") {
+            core = String(core[..<metadataStart])
+        }
+
+        let versionParts = core.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let numericCore = versionParts.first,
+              numericCore.range(of: #"^\d+(\.\d+)*$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+
+        var components = numericCore.split(separator: ".").compactMap { Int($0) }
+        guard !components.isEmpty else { return nil }
+
+        while components.count > 1 && components.last == 0 {
+            components.removeLast()
+        }
+
+        let prerelease: String?
+        if versionParts.count > 1 {
+            let suffix = versionParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !suffix.isEmpty else { return nil }
+            prerelease = suffix.lowercased()
+        } else {
+            prerelease = nil
+        }
+
+        return ParsedAppVersion(components: components, prerelease: prerelease)
+    }
+
+    private func comparePrerelease(_ installed: String, _ new: String) -> ComparisonResult {
+        let installedIdentifiers = installed.split(separator: ".").map(String.init)
+        let newIdentifiers = new.split(separator: ".").map(String.init)
+        let identifierCount = max(installedIdentifiers.count, newIdentifiers.count)
+
+        for index in 0..<identifierCount {
+            guard index < installedIdentifiers.count else { return .orderedAscending }
+            guard index < newIdentifiers.count else { return .orderedDescending }
+
+            let installedIdentifier = installedIdentifiers[index]
+            let newIdentifier = newIdentifiers[index]
+
+            if installedIdentifier == newIdentifier {
+                continue
+            }
+
+            let installedNumber = Int(installedIdentifier)
+            let newNumber = Int(newIdentifier)
+
+            switch (installedNumber, newNumber) {
+            case let (installedNumber?, newNumber?):
+                if installedNumber < newNumber { return .orderedAscending }
+                if installedNumber > newNumber { return .orderedDescending }
+            case (_?, nil):
+                return .orderedAscending
+            case (nil, _?):
+                return .orderedDescending
+            case (nil, nil):
+                let comparison = installedIdentifier.compare(newIdentifier)
+                if comparison != .orderedSame {
+                    return comparison
+                }
+            }
+        }
+
+        return .orderedSame
     }
 
     private func appVersion(at appPath: String) -> String? {

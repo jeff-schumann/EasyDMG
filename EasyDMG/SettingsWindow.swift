@@ -358,6 +358,11 @@ struct SettingsTabView: View {
                     Toggle("Open app after installation", isOn: $preferences.openAppAfterInstall)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
+                    if preferences.autoInstallNewerVersions {
+                        Toggle("Always install newer versions without asking", isOn: $preferences.autoInstallNewerVersions)
+                            .toggleStyle(SettingsCheckboxStyle(theme: theme))
+                    }
+
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Installation feedback:")
                             .font(.system(size: 11.5))
@@ -669,10 +674,17 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode") }
     }
 
+    /// When true, skip the Replace prompt when the DMG contains a newer version
+    /// than the installed app. Opt-in via the in-dialog suppression checkbox.
+    @Published var autoInstallNewerVersions: Bool {
+        didSet { UserDefaults.standard.set(autoInstallNewerVersions, forKey: "autoInstallNewerVersions") }
+    }
+
     private init() {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
         self.openAppAfterInstall = UserDefaults.standard.object(forKey: "openAppAfterInstall") as? Bool ?? false
+        self.autoInstallNewerVersions = UserDefaults.standard.object(forKey: "autoInstallNewerVersions") as? Bool ?? false
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
