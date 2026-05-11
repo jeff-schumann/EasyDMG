@@ -1313,50 +1313,6 @@ class DMGProcessor: ObservableObject {
             }
         }
 
-        // Pre-flight App Management TCC check before any destructive work — without this
-        // permission, replacing an existing bundle in /Applications fails mid-install and
-        // the user just sees a generic "install failed". Probe non-destructively first.
-        if shouldReplaceExistingApp {
-            showProgress("Waiting for App Management permission...", progress: 0.2)
-            let hasPermission = await ensureAppManagementPermission(
-                forExistingAppAt: destinationPath,
-                appName: resolvedAppName,
-                dmgName: dmgName
-            )
-            if !hasPermission {
-                diagnostic("Installation canceled at App Management permission prompt for \(resolvedAppName)")
-                let didTrashDMG = await unmountAndCleanup(
-                    mountPoint: mountPoint,
-                    dmgPath: dmgPath,
-                    dmgName: dmgName,
-                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
-                )
-
-                if currentFeedbackMode == .notification && didTrashDMG {
-                    await sendNotification(
-                        title: "EasyDMG",
-                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
-                    )
-                }
-
-                ProgressWindowController.shared.hide()
-                recordCompletion(
-                    dmgName: dmgName,
-                    outcome: "skipped",
-                    details: [
-                        "app": resolvedAppName,
-                        "reason": "app_management_denied",
-                        "trashed_dmg": boolString(didTrashDMG)
-                    ]
-                )
-                return
-            }
-
-            if currentFeedbackMode == .progressBar {
-                ProgressWindowController.shared.show(message: "Preparing replacement...", progress: 0.2)
-            }
-        }
-
         // Quit any running instance before installing — otherwise the OS keeps the running
         // process bound to the old bundle and "Open after install" activates the stale copy.
         if let bundleID = bundleIdentifier(at: appPath) {
@@ -1388,6 +1344,45 @@ class DMGProcessor: ObservableObject {
                     details: [
                         "app": resolvedAppName,
                         "reason": "running_app_canceled",
+                        "trashed_dmg": boolString(didTrashDMG)
+                    ]
+                )
+                return
+            }
+        }
+
+        // Pre-flight App Management TCC check before modifying an existing app bundle —
+        // without this permission, replacing an app in /Applications fails mid-install and
+        // the user just sees a generic "install failed". Probe non-destructively first.
+        if shouldReplaceExistingApp {
+            let hasPermission = await ensureAppManagementPermission(
+                forExistingAppAt: destinationPath,
+                appName: resolvedAppName,
+                dmgName: dmgName
+            )
+            if !hasPermission {
+                diagnostic("Installation canceled at App Management permission prompt for \(resolvedAppName)")
+                let didTrashDMG = await unmountAndCleanup(
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath,
+                    dmgName: dmgName,
+                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
+                )
+
+                if currentFeedbackMode == .notification && didTrashDMG {
+                    await sendNotification(
+                        title: "EasyDMG",
+                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
+                    )
+                }
+
+                ProgressWindowController.shared.hide()
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "skipped",
+                    details: [
+                        "app": resolvedAppName,
+                        "reason": "app_management_denied",
                         "trashed_dmg": boolString(didTrashDMG)
                     ]
                 )
@@ -1881,6 +1876,8 @@ class DMGProcessor: ObservableObject {
             return false
         }
 
+        showProgress("Quitting \(appName.strippingAppSuffix)...", progress: 0.2)
+
         while true {
             let success = await quitRunningInstances(instances)
             let remaining = instances.filter { !$0.isTerminated }.count
@@ -1922,7 +1919,7 @@ class DMGProcessor: ObservableObject {
 
     // Probes App Management TCC by setting the existing bundle's modification date
     // to its current value — a no-op write that still exercises the permission check.
-    private func canModifyExistingApp(at path: String) -> Bool {
+    private func canModifyExistingApp(at path: String) -> (granted: Bool, errorDomain: String?, errorCode: Int?) {
         do {
             let attrs = try FileManager.default.attributesOfItem(atPath: path)
             let originalDate = attrs[.modificationDate] as? Date ?? Date()
@@ -1930,13 +1927,13 @@ class DMGProcessor: ObservableObject {
                 [.modificationDate: originalDate],
                 ofItemAtPath: path
             )
-            return true
+            return (true, nil, nil)
         } catch {
             let nsError = error as NSError
             diagnostic(
                 "App Management probe failed: domain=\(nsError.domain) code=\(nsError.code)"
             )
-            return false
+            return (false, nsError.domain, nsError.code)
         }
     }
 
@@ -1977,7 +1974,7 @@ class DMGProcessor: ObservableObject {
                 let controller = AppManagementPermissionWindowController(
                     appName: appName,
                     permissionProbe: { [weak self] in
-                        self?.canModifyExistingApp(at: existingAppPath) ?? false
+                        self?.canModifyExistingApp(at: existingAppPath).granted ?? false
                     },
                     openSettings: {
                         DiagnosticLogger.shared.support(
@@ -2015,7 +2012,8 @@ class DMGProcessor: ObservableObject {
         dmgName: String
     ) async -> Bool {
         while true {
-            if canModifyExistingApp(at: path) {
+            let probe = canModifyExistingApp(at: path)
+            if probe.granted {
                 support(
                     event: "app_management_probe",
                     details: ["app": appName, "dmg": dmgName, "result": "granted"]
@@ -2023,10 +2021,20 @@ class DMGProcessor: ObservableObject {
                 return true
             }
 
-            support(
-                event: "app_management_probe",
-                details: ["app": appName, "dmg": dmgName, "result": "denied"]
-            )
+            var deniedDetails: [String: String] = [
+                "app": appName,
+                "dmg": dmgName,
+                "result": "denied"
+            ]
+            if let domain = probe.errorDomain {
+                deniedDetails["error_domain"] = domain
+            }
+            if let code = probe.errorCode {
+                deniedDetails["error_code"] = String(code)
+            }
+            support(event: "app_management_probe", details: deniedDetails)
+
+            showProgress("Waiting for App Management permission...", progress: 0.2)
 
             let decision = await showAppManagementPermissionDialog(
                 forExistingAppAt: path,

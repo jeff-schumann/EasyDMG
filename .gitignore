@@ -5,6 +5,10 @@ build/
 DerivedData/
 .build/
 
+## SourceKit-LSP / xcode-build-server (machine-specific paths)
+buildServer.json
+.bsp/
+
 ## Various settings
 *.pbxuser
 !default.pbxuser
