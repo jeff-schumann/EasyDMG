@@ -31,12 +31,70 @@ struct EasyDMGApp: App {
     }
 }
 
+@MainActor
+private final class SparklePresentationDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
+    var focusPresentedUpdate: (() -> Void)?
+
+    private var userStartedInstall = false
+
+    func standardUserDriverAllowsMinimizableStatusWindow() -> Bool {
+        false
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        userDidMake choice: SPUUserUpdateChoice,
+        forUpdate updateItem: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        guard choice == .install else { return }
+
+        userStartedInstall = true
+        refocusUpdateUI()
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        guard userStartedInstall else { return }
+
+        refocusUpdateUI()
+    }
+
+    func updater(_ updater: SPUUpdater, didExtractUpdate item: SUAppcastItem) {
+        guard userStartedInstall else { return }
+
+        refocusUpdateUI()
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
+        error: Error?
+    ) {
+        userStartedInstall = false
+    }
+
+    private func refocusUpdateUI() {
+        // Sparkle swaps/reuses status windows during download, extract, and ready-to-install.
+        // A few short focus passes catch those transitions without replacing Sparkle's UI.
+        for delay in [0.0, 0.25, 0.75, 1.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+
+                NSApp.activate(ignoringOtherApps: true)
+                self.focusPresentedUpdate?()
+            }
+        }
+    }
+}
+
 // AppDelegate to handle file opening events
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private let dmgProcessor = DMGProcessor()
     private var launchedWithFiles = false
     private var launchModeResolved = false
     private let updaterController: SPUStandardUpdaterController
+    // Sparkle holds delegates weakly, so EasyDMG must retain this object.
+    private let updaterPresentationDelegate: SparklePresentationDelegate
     private var isWaitingForUpdateCheck = false
 
     // Update check interval (24 hours)
@@ -46,9 +104,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     let updaterViewModel: CheckForUpdatesViewModel
 
     override init() {
-        // Initialize Sparkle updater (start it so canCheckForUpdates works)
-        updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
-        updaterViewModel = CheckForUpdatesViewModel(updater: updaterController.updater)
+        let presentationDelegate = SparklePresentationDelegate()
+        let controller = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: presentationDelegate,
+            userDriverDelegate: presentationDelegate
+        )
+
+        updaterPresentationDelegate = presentationDelegate
+        updaterController = controller
+        updaterViewModel = CheckForUpdatesViewModel(updater: controller.updater)
+
+        presentationDelegate.focusPresentedUpdate = { [weak controller] in
+            guard let userDriver = controller?.userDriver as? SPUUserDriver else { return }
+            userDriver.showUpdateInFocus?()
+        }
+
         super.init()
     }
 
