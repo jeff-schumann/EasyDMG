@@ -24,7 +24,7 @@ class ProgressWindowController: NSWindowController {
     private init() {
         // Create a compact notification-style window
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 75),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 75),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -120,6 +120,8 @@ struct InstallProgressView: View {
                 Text(state.message)
                     .font(.custom("Quantico-Regular", size: 13))
                     .lineLimit(1)
+                    .allowsTightening(true)
+                    .minimumScaleFactor(0.95)
 
                 // Custom progress bar with manual drawing (SwiftUI's .tint() is unreliable on macOS)
                 SwiftUI.ProgressView(value: state.progress, total: 1.0)
