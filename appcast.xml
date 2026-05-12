@@ -3,6 +3,26 @@
     <channel>
         <title>EasyDMG</title>
         <item>
+            <title>2.1.0</title>
+            <pubDate>Tue, 12 May 2026 16:23:18 -0400</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>2.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+<h2>EasyDMG 2.1.0</h2>
+<p>This update focuses on smoother app replacements, clearer macOS permission handling, and a more reliable install flow.</p>
+<ul>
+  <li>Improved replacing apps in Applications with version comparison, clearer Replace messaging, and an option to automatically install newer versions.</li>
+  <li>Added guided handling for macOS App Management permission so EasyDMG can recover gracefully instead of failing mid-install.</li>
+  <li>EasyDMG now checks whether the app being replaced is running and helps quit it first, preventing stale launches after installation.</li>
+  <li>Install prompts now stay visible even if EasyDMG loses focus or macOS activates another app.</li>
+  <li>Added an option to open the installed app automatically after EasyDMG finishes.</li>
+  <li>Improved DMG cleanup/unmount reliability, progress window readability, and support links.</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v2.1.0/EasyDMG_v2.1.0.dmg" length="4475994" type="application/octet-stream" sparkle:edSignature="ui308fGrIp9GpL70kufUxwB0xQpMBPnjKRIMVr8OkFCq8me+zj5IQxSe9TzV8GZ9uJnNsNE/UXx9DvLrM1OfBA=="/>
+        </item>
+        <item>
             <title>2.0.0</title>
             <pubDate>Tue, 05 May 2026 00:03:21 -0400</pubDate>
             <sparkle:version>9</sparkle:version>
