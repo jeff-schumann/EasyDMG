@@ -25,6 +25,79 @@ fileprivate enum AppManagementDecision {
     case cancel
 }
 
+/// Invisible always-on-top host window used as the parent for sheet-modal
+/// alerts. A standalone NSAlert in an `.accessory` app gets torn down on
+/// deactivation; a sheet is owned by its parent, so as long as we keep the
+/// parent alive, the sheet survives the user clicking away.
+@MainActor
+fileprivate final class AlertHostWindowController {
+    static let shared = AlertHostWindowController()
+
+    let window: NSWindow
+
+    private init() {
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 1),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        // `.floating` is load-bearing here. At `.normal` level the host (and
+        // its sheet) get torn out of the window server when the `.accessory`
+        // app deactivates — gone from Mission Control entirely, even with
+        // `hidesOnDeactivate = false`. `.floating` exempts the window from
+        // that behavior. Don't lower this without a way to recover the alert.
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        window.hidesOnDeactivate = false
+        // Hide the host outright. Sheets are child windows that render
+        // independently, so they remain fully visible.
+        window.alphaValue = 0
+    }
+
+    func show() {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        if let visible = screen?.visibleFrame {
+            let width: CGFloat = 500
+            let height: CGFloat = 1
+            let x = visible.midX - width / 2
+            // Sheet hangs down from the parent's top edge. Anchor the parent
+            // ~38% down from the visible-area top so the alert lands near the
+            // upper-middle of the screen, matching standard NSAlert placement.
+            let topY = visible.maxY - visible.height * 0.38
+            window.setFrame(
+                NSRect(x: x, y: topY - height, width: width, height: height),
+                display: false
+            )
+        }
+        window.orderFront(nil)
+    }
+
+    func hide() {
+        window.orderOut(nil)
+    }
+}
+
+/// Present an NSAlert as a sheet on an invisible always-on-top host window.
+/// See `AlertHostWindowController` for why this is needed.
+@MainActor
+fileprivate func presentHostedAlert(
+    _ alert: NSAlert,
+    completion: @escaping (NSApplication.ModalResponse) -> Void
+) {
+    let host = AlertHostWindowController.shared
+    host.show()
+    NSApp.activate(ignoringOtherApps: true)
+    alert.beginSheetModal(for: host.window) { response in
+        host.hide()
+        completion(response)
+    }
+}
+
 @MainActor
 fileprivate final class AppManagementPermissionWindowController: NSWindowController, NSWindowDelegate {
     private let appName: String
@@ -1622,23 +1695,24 @@ class DMGProcessor: ObservableObject {
                 alert.addButton(withTitle: "Replace")
                 alert.addButton(withTitle: "Cancel")
 
-                let response = alert.runModal()
-                let shouldReplace = response == .alertFirstButtonReturn
+                presentHostedAlert(alert) { response in
+                    let shouldReplace = response == .alertFirstButtonReturn
 
-                if shouldReplace, suppressCheckbox?.state == .on {
-                    UserPreferences.shared.autoInstallNewerVersions = true
-                    self.diagnostic("User enabled auto-install for newer versions via Replace dialog")
-                    self.support(
-                        event: "preference_change",
-                        details: [
-                            "preference": "autoInstallNewerVersions",
-                            "value": "true",
-                            "source": "replace_dialog_suppression"
-                        ]
-                    )
+                    if shouldReplace, suppressCheckbox?.state == .on {
+                        UserPreferences.shared.autoInstallNewerVersions = true
+                        self.diagnostic("User enabled auto-install for newer versions via Replace dialog")
+                        self.support(
+                            event: "preference_change",
+                            details: [
+                                "preference": "autoInstallNewerVersions",
+                                "value": "true",
+                                "source": "replace_dialog_suppression"
+                            ]
+                        )
+                    }
+
+                    continuation.resume(returning: shouldReplace)
                 }
-
-                continuation.resume(returning: shouldReplace)
             }
         }
     }
@@ -1835,8 +1909,9 @@ class DMGProcessor: ObservableObject {
                 alert.addButton(withTitle: "Quit & Install")
                 alert.addButton(withTitle: "Cancel")
 
-                let response = alert.runModal()
-                continuation.resume(returning: response == .alertFirstButtonReturn)
+                presentHostedAlert(alert) { response in
+                    continuation.resume(returning: response == .alertFirstButtonReturn)
+                }
             }
         }
     }
@@ -1858,8 +1933,9 @@ class DMGProcessor: ObservableObject {
                 alert.addButton(withTitle: "Try Again")
                 alert.addButton(withTitle: "Cancel")
 
-                let response = alert.runModal()
-                continuation.resume(returning: response == .alertFirstButtonReturn)
+                presentHostedAlert(alert) { response in
+                    continuation.resume(returning: response == .alertFirstButtonReturn)
+                }
             }
         }
     }
