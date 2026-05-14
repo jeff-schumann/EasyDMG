@@ -25,6 +25,170 @@ fileprivate enum AppManagementDecision {
     case cancel
 }
 
+fileprivate enum ExistingAppModificationPreflightResult {
+    case allowed
+    case blocked(reason: String)
+}
+
+fileprivate struct AppPermissionTargetDiagnostics {
+    let path: String
+    let ownerName: String?
+    let ownerID: Int?
+    let groupName: String?
+    let groupID: Int?
+    let posixPermissions: Int?
+    let extendedAttributes: [String]
+    let appStoreReceiptExists: Bool
+
+    static func unknown(path: String) -> AppPermissionTargetDiagnostics {
+        AppPermissionTargetDiagnostics(
+            path: path,
+            ownerName: nil,
+            ownerID: nil,
+            groupName: nil,
+            groupID: nil,
+            posixPermissions: nil,
+            extendedAttributes: [],
+            appStoreReceiptExists: false
+        )
+    }
+
+    var isRootOwned: Bool {
+        ownerID == 0 || ownerName == "root"
+    }
+
+    var hasAppStoreMarkers: Bool {
+        appStoreReceiptExists ||
+            extendedAttributes.contains { $0.hasPrefix("com.apple.appstore") }
+    }
+
+    var probableRestriction: String? {
+        if isRootOwned && hasAppStoreMarkers {
+            return "root_owned_app_store_managed"
+        } else if isRootOwned {
+            return "root_owned"
+        } else if hasAppStoreMarkers {
+            return "app_store_managed"
+        }
+        return nil
+    }
+
+    var automaticReplacementBlockReason: String? {
+        guard hasAppStoreMarkers else {
+            return nil
+        }
+
+        return probableRestriction ?? "app_store_managed"
+    }
+
+    var supportDetails: [String: String] {
+        var details = [
+            "target_app_store_markers": hasAppStoreMarkers ? "true" : "false",
+            "target_group": groupDescription,
+            "target_owner": ownerDescription,
+            "target_path": path,
+            "target_permissions": permissionsDescription,
+            "target_xattrs": extendedAttributes.isEmpty ? "none" : extendedAttributes.joined(separator: "|")
+        ]
+
+        if let probableRestriction {
+            details["probable_restriction"] = probableRestriction
+        }
+
+        return details
+    }
+
+    var diagnosticSummary: String {
+        [
+            "owner=\(ownerDescription)",
+            "group=\(groupDescription)",
+            "mode=\(permissionsDescription)",
+            "appStoreMarkers=\(hasAppStoreMarkers ? "true" : "false")",
+            "xattrs=\(extendedAttributes.isEmpty ? "none" : extendedAttributes.joined(separator: "|"))",
+            "probableRestriction=\(probableRestriction ?? "none")"
+        ].joined(separator: " ")
+    }
+
+    private var ownerDescription: String {
+        if let ownerName, let ownerID {
+            return "\(ownerName)(\(ownerID))"
+        } else if let ownerName {
+            return ownerName
+        } else if let ownerID {
+            return String(ownerID)
+        }
+        return "unknown"
+    }
+
+    private var groupDescription: String {
+        if let groupName, let groupID {
+            return "\(groupName)(\(groupID))"
+        } else if let groupName {
+            return groupName
+        } else if let groupID {
+            return String(groupID)
+        }
+        return "unknown"
+    }
+
+    private var permissionsDescription: String {
+        guard let posixPermissions else {
+            return "unknown"
+        }
+        return String(format: "%03o", posixPermissions & 0o777)
+    }
+}
+
+fileprivate struct AppManagementProbeResult {
+    let granted: Bool
+    let errorDomain: String?
+    let errorCode: Int?
+    let target: AppPermissionTargetDiagnostics
+
+    static func granted(target: AppPermissionTargetDiagnostics) -> AppManagementProbeResult {
+        AppManagementProbeResult(
+            granted: true,
+            errorDomain: nil,
+            errorCode: nil,
+            target: target
+        )
+    }
+
+    static func denied(error: NSError, target: AppPermissionTargetDiagnostics) -> AppManagementProbeResult {
+        AppManagementProbeResult(
+            granted: false,
+            errorDomain: error.domain,
+            errorCode: error.code,
+            target: target
+        )
+    }
+
+    static func unavailable(path: String) -> AppManagementProbeResult {
+        denied(
+            error: NSError(domain: "EasyDMG", code: -1),
+            target: .unknown(path: path)
+        )
+    }
+
+    var supportDetails: [String: String] {
+        var details = target.supportDetails
+        if let errorDomain {
+            details["error_domain"] = errorDomain
+        }
+        if let errorCode {
+            details["error_code"] = String(errorCode)
+        }
+        return details
+    }
+
+    var retryFailureMessage: String {
+        if target.probableRestriction == "root_owned" {
+            return "Still blocked. This app is root-owned; App Management may not be enough."
+        }
+        return "Still waiting for permission. Enable EasyDMG in System Settings, then try again."
+    }
+}
+
 /// Invisible always-on-top host window used as the parent for sheet-modal
 /// alerts. A standalone NSAlert in an `.accessory` app gets torn down on
 /// deactivation; a sheet is owned by its parent, so as long as we keep the
@@ -66,9 +230,9 @@ fileprivate final class AlertHostWindowController {
             let height: CGFloat = 1
             let x = visible.midX - width / 2
             // Sheet hangs down from the parent's top edge. Anchor the parent
-            // ~38% down from the visible-area top so the alert lands near the
+            // ~22% down from the visible-area top so the alert lands near the
             // upper-middle of the screen, matching standard NSAlert placement.
-            let topY = visible.maxY - visible.height * 0.38
+            let topY = visible.maxY - visible.height * 0.22
             window.setFrame(
                 NSRect(x: x, y: topY - height, width: width, height: height),
                 display: false
@@ -101,7 +265,7 @@ fileprivate func presentHostedAlert(
 @MainActor
 fileprivate final class AppManagementPermissionWindowController: NSWindowController, NSWindowDelegate {
     private let appName: String
-    private let permissionProbe: () -> Bool
+    private let permissionProbe: () -> AppManagementProbeResult
     private let openSettings: () -> Void
     private let permissionReady: (String) -> Void
     private let completion: (AppManagementDecision) -> Void
@@ -116,7 +280,7 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
 
     init(
         appName: String,
-        permissionProbe: @escaping () -> Bool,
+        permissionProbe: @escaping () -> AppManagementProbeResult,
         openSettings: @escaping () -> Void,
         permissionReady: @escaping (String) -> Void,
         completion: @escaping (AppManagementDecision) -> Void
@@ -180,7 +344,8 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
     func refreshPermissionStatus(reason: String) -> Bool {
         guard !didFinish else { return false }
 
-        if permissionProbe() {
+        let probe = permissionProbe()
+        if probe.granted {
             markPermissionReady(reason: reason)
             return true
         } else if isPermissionReady {
@@ -367,11 +532,12 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
     }
 
     @objc private func tryAgainClicked() {
-        if permissionProbe() {
+        let probe = permissionProbe()
+        if probe.granted {
             markPermissionReady(reason: "try_again")
             finish(.retry)
         } else {
-            statusLabel.stringValue = "Still waiting for permission. Enable EasyDMG in System Settings, then try again."
+            statusLabel.stringValue = probe.retryFailureMessage
             NSSound.beep()
         }
     }
@@ -1449,13 +1615,13 @@ class DMGProcessor: ObservableObject {
         // without this permission, replacing an app in /Applications fails mid-install and
         // the user just sees a generic "install failed". Probe non-destructively first.
         if shouldReplaceExistingApp {
-            let hasPermission = await ensureAppManagementPermission(
+            let modificationPreflight = await ensureAppManagementPermission(
                 forExistingAppAt: destinationPath,
                 appName: resolvedAppName,
                 dmgName: dmgName
             )
-            if !hasPermission {
-                diagnostic("Installation canceled at App Management permission prompt for \(resolvedAppName)")
+            if case let .blocked(reason) = modificationPreflight {
+                diagnostic("Installation canceled before replacing \(resolvedAppName): \(reason)")
                 let didTrashDMG = await unmountAndCleanup(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
@@ -1476,7 +1642,7 @@ class DMGProcessor: ObservableObject {
                     outcome: "skipped",
                     details: [
                         "app": resolvedAppName,
-                        "reason": "app_management_denied",
+                        "reason": reason,
                         "trashed_dmg": boolString(didTrashDMG)
                     ]
                 )
@@ -1565,25 +1731,40 @@ class DMGProcessor: ObservableObject {
             diagnostic("Installation failed while copying/replacing: \(error)")
             cleanupStagedAppIfNeeded(at: stagedURL)
             let permissionDenied = isAppManagementError(error)
-            let failureReason = permissionDenied ? "app_management_denied" : "copy_or_replace_failed"
+            let targetProbe = permissionDenied ? canModifyExistingApp(at: destinationPath) : nil
+            let failureReason = targetProbe?.target.automaticReplacementBlockReason
+                ?? (permissionDenied ? "app_management_denied" : "copy_or_replace_failed")
+            var failureDetails = errorDetails(error).merging([
+                "app": resolvedAppName,
+                "dmg": dmgName,
+                "reason": failureReason,
+                "result": "failed"
+            ]) { current, _ in current }
+            if let targetProbe {
+                failureDetails.merge(targetProbe.supportDetails) { _, new in new }
+            }
             support(
                 event: "install_result",
-                details: errorDetails(error).merging([
-                    "app": resolvedAppName,
-                    "dmg": dmgName,
-                    "reason": failureReason,
-                    "result": "failed"
-                ]) { current, _ in current }
+                details: failureDetails
             )
             recordCompletion(
                 dmgName: dmgName,
                 outcome: "error",
                 details: ["app": resolvedAppName, "reason": failureReason]
             )
-            let errorMessage = permissionDenied
-                ? "EasyDMG needs App Management permission. Open System Settings → Privacy & Security → App Management, enable EasyDMG, then try again."
-                : "Installation failed"
-            await handleError(errorMessage)
+            if let targetProbe,
+               targetProbe.target.automaticReplacementBlockReason != nil {
+                await showManagedAppReplacementBlockedDialog(
+                    appName: resolvedAppName,
+                    dmgName: dmgName,
+                    target: targetProbe.target
+                )
+            } else {
+                let errorMessage = permissionDenied
+                    ? (targetProbe?.retryFailureMessage ?? "EasyDMG needs App Management permission. Open System Settings > Privacy & Security > App Management, enable EasyDMG, then try again.")
+                    : "Installation failed"
+                await handleError(errorMessage)
+            }
             _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.6)
             return
         }
@@ -2016,7 +2197,9 @@ class DMGProcessor: ObservableObject {
 
     // Probes App Management TCC by setting the existing bundle's modification date
     // to its current value — a no-op write that still exercises the permission check.
-    private func canModifyExistingApp(at path: String) -> (granted: Bool, errorDomain: String?, errorCode: Int?) {
+    private func canModifyExistingApp(at path: String) -> AppManagementProbeResult {
+        let target = appPermissionTargetDiagnostics(at: path)
+
         do {
             let attrs = try FileManager.default.attributesOfItem(atPath: path)
             let originalDate = attrs[.modificationDate] as? Date ?? Date()
@@ -2024,14 +2207,72 @@ class DMGProcessor: ObservableObject {
                 [.modificationDate: originalDate],
                 ofItemAtPath: path
             )
-            return (true, nil, nil)
+            return .granted(target: target)
         } catch {
             let nsError = error as NSError
             diagnostic(
-                "App Management probe failed: domain=\(nsError.domain) code=\(nsError.code)"
+                "App Management probe failed: domain=\(nsError.domain) code=\(nsError.code) \(target.diagnosticSummary)"
             )
-            return (false, nsError.domain, nsError.code)
+            return .denied(error: nsError, target: target)
         }
+    }
+
+    private func appPermissionTargetDiagnostics(at path: String) -> AppPermissionTargetDiagnostics {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let ownerID = (attrs?[.ownerAccountID] as? NSNumber)?.intValue
+        let groupID = (attrs?[.groupOwnerAccountID] as? NSNumber)?.intValue
+        let posixPermissions = (attrs?[.posixPermissions] as? NSNumber)?.intValue
+        let receiptPath = URL(fileURLWithPath: path)
+            .appendingPathComponent("Contents/_MASReceipt/receipt")
+            .path
+
+        return AppPermissionTargetDiagnostics(
+            path: path,
+            ownerName: attrs?[.ownerAccountName] as? String,
+            ownerID: ownerID,
+            groupName: attrs?[.groupOwnerAccountName] as? String,
+            groupID: groupID,
+            posixPermissions: posixPermissions,
+            extendedAttributes: extendedAttributeNames(at: path),
+            appStoreReceiptExists: FileManager.default.fileExists(atPath: receiptPath)
+        )
+    }
+
+    private func extendedAttributeNames(at path: String) -> [String] {
+        let url = URL(fileURLWithPath: path)
+        let length = url.withUnsafeFileSystemRepresentation { fileSystemPath -> Int in
+            guard let fileSystemPath else { return -1 }
+            return listxattr(fileSystemPath, nil, 0, XATTR_NOFOLLOW)
+        }
+
+        guard length > 0 else { return [] }
+
+        var buffer = [CChar](repeating: 0, count: length)
+        let result = buffer.withUnsafeMutableBufferPointer { bufferPointer in
+            url.withUnsafeFileSystemRepresentation { fileSystemPath -> Int in
+                guard let fileSystemPath, let baseAddress = bufferPointer.baseAddress else { return -1 }
+                return listxattr(fileSystemPath, baseAddress, length, XATTR_NOFOLLOW)
+            }
+        }
+
+        guard result > 0 else { return [] }
+
+        var names: [String] = []
+        buffer.withUnsafeBufferPointer { bufferPointer in
+            guard let baseAddress = bufferPointer.baseAddress else { return }
+
+            var offset = 0
+            while offset < result {
+                let namePointer = baseAddress.advanced(by: offset)
+                let name = String(cString: namePointer)
+                if !name.isEmpty {
+                    names.append(name)
+                }
+                offset += strlen(namePointer) + 1
+            }
+        }
+
+        return names.sorted()
     }
 
     private func isAppManagementError(_ error: Error) -> Bool {
@@ -2071,7 +2312,20 @@ class DMGProcessor: ObservableObject {
                 let controller = AppManagementPermissionWindowController(
                     appName: appName,
                     permissionProbe: { [weak self] in
-                        self?.canModifyExistingApp(at: existingAppPath).granted ?? false
+                        guard let self else {
+                            return .unavailable(path: existingAppPath)
+                        }
+
+                        let probe = self.canModifyExistingApp(at: existingAppPath)
+                        var details = [
+                            "app": appName,
+                            "dmg": dmgName,
+                            "result": probe.granted ? "granted" : "denied",
+                            "source": "permission_window"
+                        ]
+                        details.merge(probe.supportDetails) { _, new in new }
+                        self.support(event: "app_management_probe", details: details)
+                        return probe
                     },
                     openSettings: {
                         DiagnosticLogger.shared.support(
@@ -2103,19 +2357,59 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private func showManagedAppReplacementBlockedDialog(
+        appName: String,
+        dmgName: String,
+        target: AppPermissionTargetDiagnostics
+    ) async {
+        ProgressWindowController.shared.hide()
+
+        let response = await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Can't replace \(appName.strippingAppSuffix)"
+            alert.informativeText = """
+            \(appName.strippingAppSuffix) is managed by the App Store, and macOS doesn't let EasyDMG replace App Store apps.
+
+            To install this version, move \(appName.strippingAppSuffix) from your Applications folder to the Trash to uninstall, then open the DMG again.
+            """
+            alert.addButton(withTitle: "Show in Finder")
+            alert.addButton(withTitle: "Cancel")
+
+            presentHostedAlert(alert) { response in
+                continuation.resume(returning: response)
+            }
+        }
+
+        let action: String
+        if response == .alertFirstButtonReturn {
+            action = "reveal_existing_app"
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: target.path)])
+        } else {
+            action = "cancel"
+        }
+
+        var details = [
+            "action": action,
+            "app": appName,
+            "dmg": dmgName
+        ]
+        details.merge(target.supportDetails) { _, new in new }
+        support(event: "managed_app_replacement_blocked", details: details)
+    }
+
     private func ensureAppManagementPermission(
         forExistingAppAt path: String,
         appName: String,
         dmgName: String
-    ) async -> Bool {
+    ) async -> ExistingAppModificationPreflightResult {
         while true {
             let probe = canModifyExistingApp(at: path)
             if probe.granted {
-                support(
-                    event: "app_management_probe",
-                    details: ["app": appName, "dmg": dmgName, "result": "granted"]
-                )
-                return true
+                var grantedDetails = ["app": appName, "dmg": dmgName, "result": "granted"]
+                grantedDetails.merge(probe.supportDetails) { _, new in new }
+                support(event: "app_management_probe", details: grantedDetails)
+                return .allowed
             }
 
             var deniedDetails: [String: String] = [
@@ -2123,13 +2417,17 @@ class DMGProcessor: ObservableObject {
                 "dmg": dmgName,
                 "result": "denied"
             ]
-            if let domain = probe.errorDomain {
-                deniedDetails["error_domain"] = domain
-            }
-            if let code = probe.errorCode {
-                deniedDetails["error_code"] = String(code)
-            }
+            deniedDetails.merge(probe.supportDetails) { _, new in new }
             support(event: "app_management_probe", details: deniedDetails)
+
+            if let reason = probe.target.automaticReplacementBlockReason {
+                await showManagedAppReplacementBlockedDialog(
+                    appName: appName,
+                    dmgName: dmgName,
+                    target: probe.target
+                )
+                return .blocked(reason: reason)
+            }
 
             showProgress("Waiting for App Management permission...", progress: 0.2)
 
@@ -2156,7 +2454,7 @@ class DMGProcessor: ObservableObject {
             case .retry:
                 continue
             case .cancel:
-                return false
+                return .blocked(reason: "app_management_denied")
             }
         }
     }
