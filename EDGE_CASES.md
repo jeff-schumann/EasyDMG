@@ -46,7 +46,7 @@ Large apps can take long enough that users wonder whether anything is still happ
 
 ### 1. App Translocation - Rating: 2/10 - MOSTLY MITIGATED
 
-macOS can translocate quarantined apps launched from unsafe locations. EasyDMG copies apps to `/Applications` and removes `com.apple.quarantine`, so the normal translocation trigger should not apply.
+macOS can translocate quarantined apps launched from unsafe locations. EasyDMG copies apps to `/Applications` and removes `com.apple.quarantine` (after verifying the app via Gatekeeper/Notarization), so the normal translocation trigger should not apply for safe apps.
 
 **Remaining concern**: A small number of apps may have custom first-launch checks that complain anyway. That is app-specific and not something EasyDMG can reliably detect before launch.
 
@@ -78,7 +78,7 @@ Some DMGs include hidden `.app` bundles used by installer scripts.
 
 The known Sparkle false-update problem was caused by copied quarantine attributes.
 
-**Current behavior**: EasyDMG removes `com.apple.quarantine` after copying, matching the behavior users expect from a normal Finder drag-and-drop install.
+**Current behavior**: EasyDMG evaluates the app's security status with macOS Gatekeeper. If it passes (or the user approves an unverified app), EasyDMG removes `com.apple.quarantine` after copying, matching the behavior users expect from a normal Finder drag-and-drop install. Blocked apps retain their quarantine state.
 
 **Remaining concern**: Other update frameworks could have app-specific assumptions, but there is no general-purpose fix unless a specific reproducible bug appears.
 
