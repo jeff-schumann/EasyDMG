@@ -718,6 +718,58 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private nonisolated final class ProcessTerminationObserver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var didTerminate = false
+        private var nextWaiterID = 0
+        private var waiters: [Int: CheckedContinuation<Bool, Never>] = [:]
+
+        func processTerminated() {
+            lock.lock()
+            didTerminate = true
+            let continuations = Array(waiters.values)
+            waiters.removeAll()
+            lock.unlock()
+
+            continuations.forEach { $0.resume(returning: true) }
+        }
+
+        func wait(timeout: TimeInterval) async -> Bool {
+            await withCheckedContinuation { continuation in
+                let waiterID: Int
+
+                lock.lock()
+                if didTerminate {
+                    lock.unlock()
+                    continuation.resume(returning: true)
+                    return
+                }
+
+                waiterID = nextWaiterID
+                nextWaiterID += 1
+                waiters[waiterID] = continuation
+                lock.unlock()
+
+                Task.detached { [self] in
+                    try? await Task.sleep(nanoseconds: Self.nanoseconds(for: timeout))
+                    resumeWaiter(id: waiterID, didTerminate: false)
+                }
+            }
+        }
+
+        private func resumeWaiter(id: Int, didTerminate: Bool) {
+            lock.lock()
+            let continuation = waiters.removeValue(forKey: id)
+            lock.unlock()
+
+            continuation?.resume(returning: didTerminate)
+        }
+
+        private static func nanoseconds(for timeout: TimeInterval) -> UInt64 {
+            UInt64(max(0, timeout) * 1_000_000_000)
+        }
+    }
+
     private struct AppSecurityAssessment: Sendable {
         let result: AppSecurityAssessmentResult
         let tool: String
@@ -962,6 +1014,24 @@ class DMGProcessor: ObservableObject {
 
         let operationTask = Task.detached(priority: .userInitiated) {
             operation()
+        }
+
+        let timerTask = startMagicFallbackTimer(progress: progress)
+        defer { timerTask.cancel() }
+
+        return await operationTask.value
+    }
+
+    /// Async version for operations that suspend while work continues elsewhere.
+    private func withMagicFallback<T: Sendable>(
+        message: String,
+        progress: Double,
+        operation: @escaping @Sendable () async -> T
+    ) async -> T {
+        showProgress(message, progress: progress)
+
+        let operationTask = Task.detached(priority: .userInitiated) {
+            await operation()
         }
 
         let timerTask = startMagicFallbackTimer(progress: progress)
@@ -1849,7 +1919,7 @@ class DMGProcessor: ObservableObject {
                 message: "Verifying with macOS...",
                 progress: 0.25
             ) {
-                self.assessAppSecurity(at: stagedURL.path)
+                await self.assessAppSecurity(at: stagedURL.path)
             }
 
             var assessmentDetails = assessment.supportDetails
@@ -2827,18 +2897,18 @@ class DMGProcessor: ObservableObject {
         return trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG, dmgName: dmgName)
     }
 
-    private nonisolated func assessAppSecurity(at appPath: String) -> AppSecurityAssessment {
+    private nonisolated func assessAppSecurity(at appPath: String) async -> AppSecurityAssessment {
         let syspolicyURL = URL(fileURLWithPath: "/usr/bin/syspolicy_check")
         if FileManager.default.isExecutableFile(atPath: syspolicyURL.path) {
             do {
-                let result = try runAssessmentProcess(
+                let result = try await runAssessmentProcess(
                     executableURL: syspolicyURL,
                     arguments: ["distribution", appPath, "--json"],
                     timeout: 8
                 )
 
                 if result.timedOut {
-                    return assessAppWithSpctl(
+                    return await assessAppWithSpctl(
                         at: appPath,
                         usedFallback: true,
                         previousTool: "syspolicy_check",
@@ -2861,7 +2931,7 @@ class DMGProcessor: ObservableObject {
                     )
                 }
 
-                return refineFailedAssessment(
+                return await refineFailedAssessment(
                     tool: "syspolicy_check",
                     result: result,
                     appPath: appPath,
@@ -2869,7 +2939,7 @@ class DMGProcessor: ObservableObject {
                     previousTimedOut: false
                 )
             } catch {
-                return assessAppWithSpctl(
+                return await assessAppWithSpctl(
                     at: appPath,
                     usedFallback: true,
                     previousTool: "syspolicy_check",
@@ -2879,7 +2949,7 @@ class DMGProcessor: ObservableObject {
             }
         }
 
-        return assessAppWithSpctl(
+        return await assessAppWithSpctl(
             at: appPath,
             usedFallback: true,
             previousTool: "syspolicy_check_unavailable",
@@ -2894,7 +2964,7 @@ class DMGProcessor: ObservableObject {
         previousTool: String,
         previousTimedOut: Bool,
         previousSummary: String
-    ) -> AppSecurityAssessment {
+    ) async -> AppSecurityAssessment {
         let spctlURL = URL(fileURLWithPath: "/usr/sbin/spctl")
         guard FileManager.default.isExecutableFile(atPath: spctlURL.path) else {
             return AppSecurityAssessment(
@@ -2913,7 +2983,7 @@ class DMGProcessor: ObservableObject {
         }
 
         do {
-            let result = try runAssessmentProcess(
+            let result = try await runAssessmentProcess(
                 executableURL: spctlURL,
                 arguments: ["-a", "-vvv", "--type", "execute", appPath],
                 timeout: 8
@@ -2951,7 +3021,7 @@ class DMGProcessor: ObservableObject {
                 )
             }
 
-            return refineFailedAssessment(
+            return await refineFailedAssessment(
                 tool: "spctl",
                 result: result,
                 appPath: appPath,
@@ -2983,7 +3053,7 @@ class DMGProcessor: ObservableObject {
         usedFallback: Bool,
         previousTool: String? = nil,
         previousTimedOut: Bool
-    ) -> AppSecurityAssessment {
+    ) async -> AppSecurityAssessment {
         let codesignURL = URL(fileURLWithPath: "/usr/bin/codesign")
         let primaryOutput = result.combinedOutput
 
@@ -3005,7 +3075,7 @@ class DMGProcessor: ObservableObject {
         }
 
         do {
-            let codesignResult = try runAssessmentProcess(
+            let codesignResult = try await runAssessmentProcess(
                 executableURL: codesignURL,
                 arguments: ["--verify", "--deep", "--strict", "--verbose=2", appPath],
                 timeout: 8
@@ -3177,7 +3247,7 @@ class DMGProcessor: ObservableObject {
         executableURL: URL,
         arguments: [String],
         timeout: TimeInterval
-    ) throws -> AssessmentProcessResult {
+    ) async throws -> AssessmentProcessResult {
         let task = Process()
         task.executableURL = executableURL
         task.arguments = arguments
@@ -3189,9 +3259,9 @@ class DMGProcessor: ObservableObject {
         let outputCollector = ProcessPipeCollector(pipe: outputPipe)
         let errorCollector = ProcessPipeCollector(pipe: errorPipe)
 
-        let semaphore = DispatchSemaphore(value: 0)
+        let terminationObserver = ProcessTerminationObserver()
         task.terminationHandler = { _ in
-            semaphore.signal()
+            terminationObserver.processTerminated()
         }
 
         try task.run()
@@ -3199,16 +3269,16 @@ class DMGProcessor: ObservableObject {
         errorCollector.startReading()
 
         var timedOut = false
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+        if await !terminationObserver.wait(timeout: timeout) {
             timedOut = true
             DiagnosticLogger.shared.diagnostic(
                 "Assessment process timed out: \(executableURL.lastPathComponent) \(arguments.joined(separator: " "))"
             )
             let processIdentifier = task.processIdentifier
             task.terminate()
-            if semaphore.wait(timeout: .now() + 1) == .timedOut {
+            if await !terminationObserver.wait(timeout: 1) {
                 kill(processIdentifier, SIGKILL)
-                _ = semaphore.wait(timeout: .now() + 1)
+                _ = await terminationObserver.wait(timeout: 1)
             }
         }
 

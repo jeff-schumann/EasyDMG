@@ -6,11 +6,13 @@
 //
 
 import Foundation
+import Darwin
 
 final class DiagnosticLogger: @unchecked Sendable {
     private struct LogTarget: Sendable {
         let url: URL
         let archivedURL: URL
+        let lockURL: URL
         let maxBytes: UInt64
     }
 
@@ -61,6 +63,7 @@ final class DiagnosticLogger: @unchecked Sendable {
             supportTarget = LogTarget(
                 url: logsDirectory.appendingPathComponent("support.log"),
                 archivedURL: logsDirectory.appendingPathComponent("support.previous.log"),
+                lockURL: logsDirectory.appendingPathComponent("support.log.lock"),
                 maxBytes: 256 * 1024
             )
 
@@ -68,6 +71,7 @@ final class DiagnosticLogger: @unchecked Sendable {
                 diagnosticTarget = LogTarget(
                     url: logsDirectory.appendingPathComponent("diagnostic.log"),
                     archivedURL: logsDirectory.appendingPathComponent("diagnostic.previous.log"),
+                    lockURL: logsDirectory.appendingPathComponent("diagnostic.log.lock"),
                     maxBytes: 512 * 1024
                 )
             } else {
@@ -197,24 +201,83 @@ final class DiagnosticLogger: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        rotateIfNeeded(target)
-
-        let data = Data(line.utf8)
-
         do {
-            if FileManager.default.fileExists(atPath: target.url.path) {
-                let handle = try FileHandle(forWritingTo: target.url)
-                defer { try? handle.close() }
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-            } else {
-                try data.write(to: target.url, options: .atomic)
+            try withExclusiveFileLock(at: target.lockURL) {
+                rotateIfNeeded(target)
+                try appendLine(line, to: target.url)
             }
         } catch {
             #if DEBUG
             print("EasyDMG logging write failed: \(error)")
             #endif
         }
+    }
+
+    nonisolated private func withExclusiveFileLock<T>(
+        at lockURL: URL,
+        operation: () throws -> T
+    ) throws -> T {
+        let fileDescriptor = Darwin.open(
+            lockURL.path,
+            O_CREAT | O_RDWR,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw POSIXError(Self.currentPOSIXErrorCode())
+        }
+
+        defer { _ = Darwin.close(fileDescriptor) }
+
+        while flock(fileDescriptor, LOCK_EX) != 0 {
+            guard errno == EINTR else {
+                throw POSIXError(Self.currentPOSIXErrorCode())
+            }
+        }
+
+        defer { _ = flock(fileDescriptor, LOCK_UN) }
+
+        return try operation()
+    }
+
+    nonisolated private func appendLine(_ line: String, to url: URL) throws {
+        let fileDescriptor = Darwin.open(
+            url.path,
+            O_WRONLY | O_CREAT | O_APPEND,
+            mode_t(S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+        )
+        guard fileDescriptor >= 0 else {
+            throw POSIXError(Self.currentPOSIXErrorCode())
+        }
+
+        defer { _ = Darwin.close(fileDescriptor) }
+
+        let bytes = Array(line.utf8)
+        try bytes.withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else {
+                return
+            }
+
+            var offset = 0
+            while offset < buffer.count {
+                let bytesWritten = Darwin.write(
+                    fileDescriptor,
+                    baseAddress.advanced(by: offset),
+                    buffer.count - offset
+                )
+
+                if bytesWritten > 0 {
+                    offset += bytesWritten
+                } else if bytesWritten == 0 {
+                    throw POSIXError(.EIO)
+                } else if errno != EINTR {
+                    throw POSIXError(Self.currentPOSIXErrorCode())
+                }
+            }
+        }
+    }
+
+    nonisolated private static func currentPOSIXErrorCode() -> POSIXErrorCode {
+        POSIXErrorCode(rawValue: errno) ?? .EIO
     }
 
     nonisolated private func rotateIfNeeded(_ target: LogTarget) {
