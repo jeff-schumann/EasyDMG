@@ -358,10 +358,10 @@ struct SettingsTabView: View {
                     Toggle("Open app after installation", isOn: $preferences.openAppAfterInstall)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
-                    Toggle("Do not warn me about unverified apps", isOn: $preferences.removeQuarantineForUnverifiedApps)
+                    Toggle("Do not warn me about unverified apps", isOn: $preferences.skipUnverifiedAppWarning)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
-                    if preferences.removeQuarantineForUnverifiedApps {
+                    if preferences.skipUnverifiedAppWarning {
                         Text("⚠️ EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(SettingsPalette.gold)
@@ -680,8 +680,8 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(openAppAfterInstall, forKey: "openAppAfterInstall") }
     }
 
-    @Published var removeQuarantineForUnverifiedApps: Bool {
-        didSet { UserDefaults.standard.set(removeQuarantineForUnverifiedApps, forKey: "removeQuarantineForUnverifiedApps") }
+    @Published var skipUnverifiedAppWarning: Bool {
+        didSet { UserDefaults.standard.set(skipUnverifiedAppWarning, forKey: "skipUnverifiedAppWarning") }
     }
 
     @Published var feedbackMode: FeedbackMode {
@@ -698,7 +698,7 @@ class UserPreferences: ObservableObject {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
         self.openAppAfterInstall = UserDefaults.standard.object(forKey: "openAppAfterInstall") as? Bool ?? false
-        self.removeQuarantineForUnverifiedApps = UserDefaults.standard.object(forKey: "removeQuarantineForUnverifiedApps") as? Bool ?? false
+        self.skipUnverifiedAppWarning = UserDefaults.standard.object(forKey: "skipUnverifiedAppWarning") as? Bool ?? false
         self.autoInstallNewerVersions = UserDefaults.standard.object(forKey: "autoInstallNewerVersions") as? Bool ?? false
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue

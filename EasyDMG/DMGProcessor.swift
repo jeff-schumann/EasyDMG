@@ -561,7 +561,7 @@ class DMGProcessor: ObservableObject {
         case securityAssessmentUnverified = "security_assessment_unverified"
         case securityAssessmentBlocked = "security_assessment_blocked"
 
-        var notificationMessage: String {
+        var notificationMessage: String? {
             switch self {
             case .genericMountFailure:
                 return "EasyDMG could not mount this disk image automatically, so it opened the normal macOS installer."
@@ -579,10 +579,9 @@ class DMGProcessor: ObservableObject {
                 return "EasyDMG found multiple apps, so it opened the disk image for manual installation."
             case .licenseRequired:
                 return "This disk image appears to require a license agreement, so EasyDMG opened it for manual installation."
-            case .securityAssessmentUnverified:
-                return "macOS could not verify this app, so EasyDMG opened the disk image for manual installation."
-            case .securityAssessmentBlocked:
-                return "macOS found a stronger security or integrity issue, so EasyDMG opened the disk image for manual installation."
+            case .securityAssessmentUnverified, .securityAssessmentBlocked:
+                // Security cases already showed a prompt to the user, so no follow-up notification.
+                return nil
             }
         }
     }
@@ -1095,9 +1094,13 @@ class DMGProcessor: ObservableObject {
             return
         }
 
+        guard let message = reason.notificationMessage else {
+            return
+        }
+
         await sendNotification(
             title: "EasyDMG needs manual install",
-            message: "\(dmgName): \(reason.notificationMessage)"
+            message: "\(dmgName): \(message)"
         )
     }
 
@@ -1935,7 +1938,7 @@ class DMGProcessor: ObservableObject {
             quarantineDetails["app"] = resolvedAppName
             quarantineDetails["dmg"] = dmgName
             quarantineDetails["quarantine_decision"] = quarantineDecision.rawValue
-            quarantineDetails["compatibility_mode"] = boolString(UserPreferences.shared.removeQuarantineForUnverifiedApps)
+            quarantineDetails["skip_unverified_warning"] = boolString(UserPreferences.shared.skipUnverifiedAppWarning)
             support(event: "quarantine_decision", details: quarantineDetails)
 
             switch quarantineDecision {
@@ -3304,7 +3307,7 @@ class DMGProcessor: ObservableObject {
             return .removeQuarantine
 
         case .unverified:
-            if UserPreferences.shared.removeQuarantineForUnverifiedApps {
+            if UserPreferences.shared.skipUnverifiedAppWarning {
                 return .removeQuarantine
             }
             return await showUnverifiedAppQuarantineDialog(appName: appName)
