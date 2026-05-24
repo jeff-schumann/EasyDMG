@@ -2908,7 +2908,7 @@ class DMGProcessor: ObservableObject {
         let primaryOutput = result.combinedOutput
 
         guard FileManager.default.isExecutableFile(atPath: codesignURL.path) else {
-            let blockedReason = blockedSecurityReason(in: primaryOutput)
+            let blockedReason = blockedSecurityReason(in: primaryOutput, appPath: appPath)
             return AppSecurityAssessment(
                 result: blockedReason == nil ? .unverified : .blocked,
                 tool: tool,
@@ -2930,7 +2930,7 @@ class DMGProcessor: ObservableObject {
             )
             let combinedOutput = primaryOutput + "\n" + codesignResult.combinedOutput
 
-            if let reason = blockedSecurityReason(in: combinedOutput) {
+            if let reason = blockedSecurityReason(in: combinedOutput, appPath: appPath) {
                 return AppSecurityAssessment(
                     result: .blocked,
                     tool: tool,
@@ -2968,7 +2968,7 @@ class DMGProcessor: ObservableObject {
             )
         } catch {
             let combinedOutput = primaryOutput + "\n" + String(describing: error)
-            if let reason = blockedSecurityReason(in: combinedOutput) {
+            if let reason = blockedSecurityReason(in: combinedOutput, appPath: appPath) {
                 return AppSecurityAssessment(
                     result: .blocked,
                     tool: tool,
@@ -2996,21 +2996,76 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private nonisolated func blockedSecurityReason(in output: String) -> String? {
-        let lowercasedOutput = output.lowercased()
+    private nonisolated func blockedSecurityReason(in output: String, appPath: String) -> String? {
+        let lowercasedOutput = assessmentDiagnosticsForPatternMatching(output, appPath: appPath)
         let blockedPatterns: [(pattern: String, reason: String)] = [
-            ("xprotect", "xprotect_blocked"),
-            ("malware", "malware_blocked"),
-            ("revoked", "signature_revoked"),
+            ("source=xprotect", "xprotect_blocked"),
+            ("xprotectservice", "xprotect_blocked"),
+            ("xprotect blocked", "xprotect_blocked"),
+            ("malware was detected", "malware_blocked"),
+            ("malware detected", "malware_blocked"),
+            ("detected malware", "malware_blocked"),
+            ("contains malware", "malware_blocked"),
+            ("identified as malware", "malware_blocked"),
+            ("known malware", "malware_blocked"),
+            ("certificate has been revoked", "signature_revoked"),
+            ("certificate was revoked", "signature_revoked"),
+            ("certificate revoked", "signature_revoked"),
+            ("cssmerr_tp_cert_revoked", "signature_revoked"),
             ("code or signature have been modified", "signature_modified"),
             ("invalid signature", "invalid_signature"),
+            ("code signature is invalid", "invalid_signature"),
+            ("code signature invalid", "invalid_signature"),
             ("a sealed resource is missing or invalid", "sealed_resource_invalid"),
-            ("sealed resource", "sealed_resource_invalid"),
+            ("sealed resource is missing or invalid", "sealed_resource_invalid"),
             ("the code has been modified", "signature_modified"),
-            ("damaged", "app_damaged")
+            ("app is damaged", "app_damaged"),
+            ("application is damaged", "app_damaged"),
+            ("bundle is damaged", "app_damaged"),
+            ("package is damaged", "app_damaged"),
+            ("is damaged and can't be opened", "app_damaged")
         ]
 
         return blockedPatterns.first { lowercasedOutput.contains($0.pattern) }?.reason
+    }
+
+    private nonisolated func assessmentDiagnosticsForPatternMatching(_ output: String, appPath: String) -> String {
+        let appURL = URL(fileURLWithPath: appPath)
+        let appName = appURL.lastPathComponent
+        // Assessment tools echo the target path; strip it before matching words that may appear in app names.
+        let pathVariants = Set([
+            appPath,
+            appURL.path,
+            appURL.standardizedFileURL.path,
+            appURL.resolvingSymlinksInPath().path,
+            appName
+        ].filter { !$0.isEmpty })
+
+        return output
+            .components(separatedBy: .newlines)
+            .compactMap { line -> String? in
+                let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedLine.isEmpty else {
+                    return nil
+                }
+
+                let lowercasedLine = trimmedLine.lowercased()
+                if lowercasedLine.hasPrefix("origin=") || lowercasedLine.hasPrefix("authority=") {
+                    return nil
+                }
+
+                return pathVariants
+                    .sorted { $0.count > $1.count }
+                    .reduce(trimmedLine) { sanitizedLine, pathVariant in
+                        sanitizedLine.replacingOccurrences(
+                            of: pathVariant,
+                            with: "<app>",
+                            options: [.caseInsensitive]
+                        )
+                    }
+            }
+            .joined(separator: "\n")
+            .lowercased()
     }
 
     private nonisolated func isUnsignedAssessment(_ output: String) -> Bool {
