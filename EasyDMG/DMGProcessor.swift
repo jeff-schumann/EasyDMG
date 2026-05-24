@@ -3248,36 +3248,34 @@ class DMGProcessor: ObservableObject {
     private func showUnverifiedAppQuarantineDialog(appName: String) async -> QuarantineDecision {
         let displayName = appName.strippingAppSuffix
         return await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.alertStyle = .warning
-                alert.messageText = "macOS couldn't verify “\(displayName)”"
-                alert.informativeText = [
-                    "This is common with some independent apps.",
-                    "",
-                    "EasyDMG can remove the download quarantine so the app runs from Applications instead of a randomized translocation path. Only continue for apps from sources you trust.",
-                    "",
-                    "You can skip this prompt in Settings by enabling Compatibility Mode."
-                ].joined(separator: "\n")
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "macOS couldn't verify “\(displayName)”"
+            alert.informativeText = [
+                "This is common with some independent apps.",
+                "",
+                "EasyDMG can remove the download quarantine so the app runs from Applications instead of a randomized translocation path. Only continue for apps from sources you trust.",
+                "",
+                "You can skip this prompt in Settings by enabling Compatibility Mode."
+            ].joined(separator: "\n")
 
-                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-                   let icon = NSImage(contentsOfFile: iconPath) {
-                    alert.icon = icon
-                }
+            if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+               let icon = NSImage(contentsOfFile: iconPath) {
+                alert.icon = icon
+            }
 
-                alert.addButton(withTitle: "Remove Quarantine & Install")
-                alert.addButton(withTitle: "Handle Manually")
-                alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Remove Quarantine & Install")
+            alert.addButton(withTitle: "Handle Manually")
+            alert.addButton(withTitle: "Cancel")
 
-                presentHostedAlert(alert) { response in
-                    switch response {
-                    case .alertFirstButtonReturn:
-                        continuation.resume(returning: .removeQuarantine)
-                    case .alertSecondButtonReturn:
-                        continuation.resume(returning: .handleManually)
-                    default:
-                        continuation.resume(returning: .cancel)
-                    }
+            presentHostedAlert(alert) { response in
+                switch response {
+                case .alertFirstButtonReturn:
+                    continuation.resume(returning: .removeQuarantine)
+                case .alertSecondButtonReturn:
+                    continuation.resume(returning: .handleManually)
+                default:
+                    continuation.resume(returning: .cancel)
                 }
             }
         }
@@ -3286,26 +3284,24 @@ class DMGProcessor: ObservableObject {
     private func showBlockedAppQuarantineDialog(appName: String) async -> QuarantineDecision {
         let displayName = appName.strippingAppSuffix
         return await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.alertStyle = .critical
-                alert.messageText = "“\(displayName)” appears damaged or unsafe"
-                alert.informativeText = "EasyDMG will not remove quarantine automatically because macOS found a stronger security or integrity problem."
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "“\(displayName)” appears damaged or unsafe"
+            alert.informativeText = "EasyDMG will not remove quarantine automatically because macOS found a stronger security or integrity problem."
 
-                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-                   let icon = NSImage(contentsOfFile: iconPath) {
-                    alert.icon = icon
-                }
+            if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+               let icon = NSImage(contentsOfFile: iconPath) {
+                alert.icon = icon
+            }
 
-                alert.addButton(withTitle: "Handle Manually")
-                alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Handle Manually")
+            alert.addButton(withTitle: "Cancel")
 
-                presentHostedAlert(alert) { response in
-                    if response == .alertFirstButtonReturn {
-                        continuation.resume(returning: .handleManually)
-                    } else {
-                        continuation.resume(returning: .cancel)
-                    }
+            presentHostedAlert(alert) { response in
+                if response == .alertFirstButtonReturn {
+                    continuation.resume(returning: .handleManually)
+                } else {
+                    continuation.resume(returning: .cancel)
                 }
             }
         }
