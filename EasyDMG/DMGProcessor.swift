@@ -3105,7 +3105,7 @@ class DMGProcessor: ObservableObject {
                 reason = "codesign_timed_out"
             } else if codesignResult.exitStatus == 0 {
                 reason = "gatekeeper_rejected_signature_valid"
-            } else if isUnsignedAssessment(combinedOutput) {
+            } else if isUnsignedAssessment(combinedOutput, appPath: appPath) {
                 reason = "unsigned_or_unnotarized"
             } else {
                 reason = "assessment_rejected_unverified"
@@ -3230,15 +3230,16 @@ class DMGProcessor: ObservableObject {
             .lowercased()
     }
 
-    private nonisolated func isUnsignedAssessment(_ output: String) -> Bool {
-        let lowercasedOutput = output.lowercased()
-        return lowercasedOutput.contains("code object is not signed at all")
-            || lowercasedOutput.contains("source=no usable signature")
-            || lowercasedOutput.contains("unsigned")
-            || lowercasedOutput.contains("not notarized")
-            || lowercasedOutput.contains("unidentified developer")
-            || lowercasedOutput.contains("unknown developer")
-            || lowercasedOutput.contains("developer cannot be verified")
+    private nonisolated func isUnsignedAssessment(_ output: String, appPath: String) -> Bool {
+        let sanitizedOutput = assessmentDiagnosticsForPatternMatching(output, appPath: appPath)
+        return sanitizedOutput.contains("code object is not signed at all")
+            || sanitizedOutput.contains("source=no usable signature")
+            || sanitizedOutput.contains("source=unsigned")
+            || sanitizedOutput.contains(" is not signed")
+            || sanitizedOutput.contains("not notarized")
+            || sanitizedOutput.contains("unidentified developer")
+            || sanitizedOutput.contains("unknown developer")
+            || sanitizedOutput.contains("developer cannot be verified")
     }
 
     private nonisolated func compactAssessmentOutput(_ output: String) -> String {
