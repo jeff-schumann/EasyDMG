@@ -358,11 +358,11 @@ struct SettingsTabView: View {
                     Toggle("Open app after installation", isOn: $preferences.openAppAfterInstall)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
-                    Toggle("Compatibility Mode: remove quarantine for unverified apps", isOn: $preferences.removeQuarantineForUnverifiedApps)
+                    Toggle("Do not warn me about unverified apps", isOn: $preferences.removeQuarantineForUnverifiedApps)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     if preferences.removeQuarantineForUnverifiedApps {
-                        Text("⚠️ Removes the download quarantine from apps macOS cannot verify. This can bypass Gatekeeper’s first-open warning on macOS 13 and later. Use only for apps from sources you trust.")
+                        Text("⚠️ EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download.")
                             .font(.system(size: 11.5))
                             .foregroundStyle(SettingsPalette.gold)
                             .lineSpacing(3)

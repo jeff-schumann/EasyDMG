@@ -1906,7 +1906,7 @@ class DMGProcessor: ObservableObject {
 
         do {
             try await withMagicFallback(
-                message: "Copying app...",
+                message: "Installing to Applications...",
                 progress: 0.2
             ) {
                 DiagnosticLogger.shared.diagnostic(
@@ -1940,7 +1940,6 @@ class DMGProcessor: ObservableObject {
 
             switch quarantineDecision {
             case .removeQuarantine:
-                showProgress("Removing quarantine...", progress: 0.28)
                 await removeQuarantineAttributes(from: stagedURL.path)
 
             case .handleManually:
@@ -3320,13 +3319,11 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "macOS couldn't verify “\(displayName)”"
+            alert.messageText = "macOS can't verify “\(displayName)”"
             alert.informativeText = [
-                "This is common with some independent apps.",
+                "This often happens with apps from smaller developers. EasyDMG can install it anyway, but only continue if you trust the developer.",
                 "",
-                "EasyDMG can remove the download quarantine so the app runs from Applications instead of a randomized translocation path. Only continue for apps from sources you trust.",
-                "",
-                "You can skip this prompt in Settings by enabling Compatibility Mode."
+                "You can turn off this warning in Settings."
             ].joined(separator: "\n")
 
             if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
@@ -3334,8 +3331,8 @@ class DMGProcessor: ObservableObject {
                 alert.icon = icon
             }
 
-            alert.addButton(withTitle: "Remove Quarantine & Install")
-            alert.addButton(withTitle: "Handle Manually")
+            alert.addButton(withTitle: "Continue Install")
+            alert.addButton(withTitle: "Inspect")
             alert.addButton(withTitle: "Cancel")
 
             presentHostedAlert(alert) { response in
@@ -3356,15 +3353,15 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "“\(displayName)” appears damaged or unsafe"
-            alert.informativeText = "EasyDMG will not remove quarantine automatically because macOS found a stronger security or integrity problem."
+            alert.messageText = "“\(displayName)” may not be safe"
+            alert.informativeText = "macOS flagged this app as damaged or potentially unsafe. EasyDMG won't install it automatically."
 
             if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
                let icon = NSImage(contentsOfFile: iconPath) {
                 alert.icon = icon
             }
 
-            alert.addButton(withTitle: "Handle Manually")
+            alert.addButton(withTitle: "Inspect")
             alert.addButton(withTitle: "Cancel")
 
             presentHostedAlert(alert) { response in
