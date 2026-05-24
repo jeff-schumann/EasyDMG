@@ -2797,8 +2797,14 @@ class DMGProcessor: ObservableObject {
             let processIdentifier = task.processIdentifier
             task.terminate()
             if semaphore.wait(timeout: .now() + 2.0) == .timedOut {
-                kill(processIdentifier, SIGKILL)
-                _ = semaphore.wait(timeout: .now() + 1.0)
+                if task.isRunning {
+                    kill(processIdentifier, SIGKILL)
+                    _ = semaphore.wait(timeout: .now() + 1.0)
+                } else {
+                    DiagnosticLogger.shared.diagnostic(
+                        "Process \(processIdentifier) already exited before SIGKILL escalation; skipping kill to avoid pid-reuse race"
+                    )
+                }
             }
         }
 
@@ -3280,8 +3286,14 @@ class DMGProcessor: ObservableObject {
             let processIdentifier = task.processIdentifier
             task.terminate()
             if await !terminationObserver.wait(timeout: 1) {
-                kill(processIdentifier, SIGKILL)
-                _ = await terminationObserver.wait(timeout: 1)
+                if task.isRunning {
+                    kill(processIdentifier, SIGKILL)
+                    _ = await terminationObserver.wait(timeout: 1)
+                } else {
+                    DiagnosticLogger.shared.diagnostic(
+                        "Assessment process \(processIdentifier) already exited before SIGKILL escalation; skipping kill to avoid pid-reuse race"
+                    )
+                }
             }
         }
 
