@@ -558,6 +558,8 @@ class DMGProcessor: ObservableObject {
         case noAppFound = "no_app_found"
         case multipleAppsFound = "multiple_apps_found"
         case licenseRequired = "license_required"
+        case securityAssessmentUnverified = "security_assessment_unverified"
+        case securityAssessmentBlocked = "security_assessment_blocked"
 
         var notificationMessage: String {
             switch self {
@@ -577,6 +579,10 @@ class DMGProcessor: ObservableObject {
                 return "EasyDMG found multiple apps, so it opened the disk image for manual installation."
             case .licenseRequired:
                 return "This disk image appears to require a license agreement, so EasyDMG opened it for manual installation."
+            case .securityAssessmentUnverified:
+                return "macOS could not verify this app, so EasyDMG opened the disk image for manual installation."
+            case .securityAssessmentBlocked:
+                return "macOS found a stronger security or integrity issue, so EasyDMG opened the disk image for manual installation."
             }
         }
     }
@@ -646,6 +652,75 @@ class DMGProcessor: ObservableObject {
         let exitStatus: Int32?
         let standardError: String
         let timedOut: Bool
+    }
+
+    private enum AppSecurityAssessmentResult: String, Sendable {
+        case passed
+        case unverified
+        case blocked
+    }
+
+    private enum QuarantineDecision: String, Sendable {
+        case removeQuarantine = "remove_quarantine"
+        case handleManually = "handle_manually"
+        case cancel
+    }
+
+    private struct AssessmentProcessResult: Sendable {
+        let exitStatus: Int32?
+        let standardOutput: String
+        let standardError: String
+        let timedOut: Bool
+
+        nonisolated var combinedOutput: String {
+            [standardOutput, standardError]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+        }
+    }
+
+    private struct AppSecurityAssessment: Sendable {
+        let result: AppSecurityAssessmentResult
+        let tool: String
+        let refinementTool: String?
+        let reason: String
+        let summary: String
+        let exitStatus: Int32?
+        let refinementExitStatus: Int32?
+        let timedOut: Bool
+        let usedFallback: Bool
+
+        var manualFallbackReason: ManualFallbackReason {
+            result == .blocked ? .securityAssessmentBlocked : .securityAssessmentUnverified
+        }
+
+        var supportDetails: [String: String] {
+            var details = [
+                "assessment_tool": tool,
+                "assessment_result": result.rawValue,
+                "assessment_reason": reason,
+                "assessment_timeout": timedOut ? "true" : "false",
+                "assessment_fallback": usedFallback ? "true" : "false"
+            ]
+
+            if let refinementTool {
+                details["assessment_refinement_tool"] = refinementTool
+            }
+
+            if let exitStatus {
+                details["assessment_exit_status"] = String(exitStatus)
+            }
+
+            if let refinementExitStatus {
+                details["assessment_refinement_exit_status"] = String(refinementExitStatus)
+            }
+
+            if !summary.isEmpty {
+                details["assessment_summary"] = summary
+            }
+
+            return details
+        }
     }
 
     private enum ApplicationsFolderIssue: String {
@@ -1689,7 +1764,7 @@ class DMGProcessor: ObservableObject {
 
         do {
             try await withMagicFallback(
-                message: "Installing to Applications...",
+                message: "Copying app...",
                 progress: 0.2
             ) {
                 DiagnosticLogger.shared.diagnostic(
@@ -1698,7 +1773,58 @@ class DMGProcessor: ObservableObject {
                 try FileManager.default.copyItem(atPath: appPath, toPath: stagedURL.path)
             }
 
-            await removeQuarantineAttributes(from: stagedURL.path)
+            let assessment = await withMagicFallback(
+                message: "Verifying with macOS...",
+                progress: 0.25
+            ) {
+                self.assessAppSecurity(at: stagedURL.path)
+            }
+
+            var assessmentDetails = assessment.supportDetails
+            assessmentDetails["app"] = resolvedAppName
+            assessmentDetails["dmg"] = dmgName
+            support(event: "app_security_assessment", details: assessmentDetails)
+
+            let quarantineDecision = await quarantineDecision(
+                for: assessment,
+                appName: resolvedAppName
+            )
+            var quarantineDetails = assessment.supportDetails
+            quarantineDetails["app"] = resolvedAppName
+            quarantineDetails["dmg"] = dmgName
+            quarantineDetails["quarantine_decision"] = quarantineDecision.rawValue
+            quarantineDetails["compatibility_mode"] = boolString(UserPreferences.shared.removeQuarantineForUnverifiedApps)
+            support(event: "quarantine_decision", details: quarantineDetails)
+
+            switch quarantineDecision {
+            case .removeQuarantine:
+                showProgress("Removing quarantine...", progress: 0.28)
+                await removeQuarantineAttributes(from: stagedURL.path)
+
+            case .handleManually:
+                cleanupStagedAppIfNeeded(at: stagedURL)
+                await openForManualInstallation(
+                    mountPoint: mountPoint,
+                    dmgName: dmgName,
+                    reason: assessment.manualFallbackReason,
+                    details: quarantineDetails
+                )
+                return
+
+            case .cancel:
+                cleanupStagedAppIfNeeded(at: stagedURL)
+                showProgress("Installation canceled", progress: 0.3)
+                _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.3)
+                ProgressWindowController.shared.hide()
+                var completionDetails = quarantineDetails
+                completionDetails["reason"] = "security_assessment_canceled"
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "skipped",
+                    details: completionDetails
+                )
+                return
+            }
 
             if shouldReplaceExistingApp && FileManager.default.fileExists(atPath: destinationPath) {
                 showProgress("Replacing existing app...", progress: 0.3)
@@ -2629,6 +2755,410 @@ class DMGProcessor: ObservableObject {
         }
 
         return trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG, dmgName: dmgName)
+    }
+
+    private nonisolated func assessAppSecurity(at appPath: String) -> AppSecurityAssessment {
+        let syspolicyURL = URL(fileURLWithPath: "/usr/bin/syspolicy_check")
+        if FileManager.default.isExecutableFile(atPath: syspolicyURL.path) {
+            do {
+                let result = try runAssessmentProcess(
+                    executableURL: syspolicyURL,
+                    arguments: ["distribution", appPath, "--json"],
+                    timeout: 8
+                )
+
+                if result.timedOut {
+                    return assessAppWithSpctl(
+                        at: appPath,
+                        usedFallback: true,
+                        previousTool: "syspolicy_check",
+                        previousTimedOut: true,
+                        previousSummary: result.combinedOutput
+                    )
+                }
+
+                if result.exitStatus == 0 {
+                    return AppSecurityAssessment(
+                        result: .passed,
+                        tool: "syspolicy_check",
+                        refinementTool: nil,
+                        reason: "assessment_passed",
+                        summary: compactAssessmentOutput(result.combinedOutput),
+                        exitStatus: result.exitStatus,
+                        refinementExitStatus: nil,
+                        timedOut: false,
+                        usedFallback: false
+                    )
+                }
+
+                return refineFailedAssessment(
+                    tool: "syspolicy_check",
+                    result: result,
+                    appPath: appPath,
+                    usedFallback: false,
+                    previousTimedOut: false
+                )
+            } catch {
+                return assessAppWithSpctl(
+                    at: appPath,
+                    usedFallback: true,
+                    previousTool: "syspolicy_check",
+                    previousTimedOut: false,
+                    previousSummary: String(describing: error)
+                )
+            }
+        }
+
+        return assessAppWithSpctl(
+            at: appPath,
+            usedFallback: true,
+            previousTool: "syspolicy_check_unavailable",
+            previousTimedOut: false,
+            previousSummary: ""
+        )
+    }
+
+    private nonisolated func assessAppWithSpctl(
+        at appPath: String,
+        usedFallback: Bool,
+        previousTool: String,
+        previousTimedOut: Bool,
+        previousSummary: String
+    ) -> AppSecurityAssessment {
+        let spctlURL = URL(fileURLWithPath: "/usr/sbin/spctl")
+        guard FileManager.default.isExecutableFile(atPath: spctlURL.path) else {
+            return AppSecurityAssessment(
+                result: .unverified,
+                tool: previousTool,
+                refinementTool: nil,
+                reason: "assessment_tool_unavailable",
+                summary: compactAssessmentOutput(previousSummary),
+                exitStatus: nil,
+                refinementExitStatus: nil,
+                timedOut: previousTimedOut,
+                usedFallback: usedFallback
+            )
+        }
+
+        do {
+            let result = try runAssessmentProcess(
+                executableURL: spctlURL,
+                arguments: ["-a", "-vvv", "--type", "execute", appPath],
+                timeout: 8
+            )
+
+            if result.timedOut {
+                return AppSecurityAssessment(
+                    result: .unverified,
+                    tool: "spctl",
+                    refinementTool: nil,
+                    reason: "assessment_timed_out",
+                    summary: compactAssessmentOutput(previousSummary + "\n" + result.combinedOutput),
+                    exitStatus: result.exitStatus,
+                    refinementExitStatus: nil,
+                    timedOut: true,
+                    usedFallback: usedFallback
+                )
+            }
+
+            if result.exitStatus == 0 {
+                return AppSecurityAssessment(
+                    result: .passed,
+                    tool: "spctl",
+                    refinementTool: nil,
+                    reason: "assessment_passed",
+                    summary: compactAssessmentOutput(result.combinedOutput),
+                    exitStatus: result.exitStatus,
+                    refinementExitStatus: nil,
+                    timedOut: previousTimedOut,
+                    usedFallback: usedFallback
+                )
+            }
+
+            return refineFailedAssessment(
+                tool: "spctl",
+                result: result,
+                appPath: appPath,
+                usedFallback: usedFallback,
+                previousTimedOut: previousTimedOut
+            )
+        } catch {
+            return AppSecurityAssessment(
+                result: .unverified,
+                tool: "spctl",
+                refinementTool: nil,
+                reason: "assessment_failed_to_run",
+                summary: compactAssessmentOutput(previousSummary + "\n" + String(describing: error)),
+                exitStatus: nil,
+                refinementExitStatus: nil,
+                timedOut: previousTimedOut,
+                usedFallback: usedFallback
+            )
+        }
+    }
+
+    private nonisolated func refineFailedAssessment(
+        tool: String,
+        result: AssessmentProcessResult,
+        appPath: String,
+        usedFallback: Bool,
+        previousTimedOut: Bool
+    ) -> AppSecurityAssessment {
+        let codesignURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        let primaryOutput = result.combinedOutput
+
+        guard FileManager.default.isExecutableFile(atPath: codesignURL.path) else {
+            let blockedReason = blockedSecurityReason(in: primaryOutput)
+            return AppSecurityAssessment(
+                result: blockedReason == nil ? .unverified : .blocked,
+                tool: tool,
+                refinementTool: nil,
+                reason: blockedReason ?? "assessment_rejected_unverified",
+                summary: compactAssessmentOutput(primaryOutput),
+                exitStatus: result.exitStatus,
+                refinementExitStatus: nil,
+                timedOut: previousTimedOut || result.timedOut,
+                usedFallback: usedFallback
+            )
+        }
+
+        do {
+            let codesignResult = try runAssessmentProcess(
+                executableURL: codesignURL,
+                arguments: ["--verify", "--deep", "--strict", "--verbose=2", appPath],
+                timeout: 8
+            )
+            let combinedOutput = primaryOutput + "\n" + codesignResult.combinedOutput
+
+            if let reason = blockedSecurityReason(in: combinedOutput) {
+                return AppSecurityAssessment(
+                    result: .blocked,
+                    tool: tool,
+                    refinementTool: "codesign",
+                    reason: reason,
+                    summary: compactAssessmentOutput(combinedOutput),
+                    exitStatus: result.exitStatus,
+                    refinementExitStatus: codesignResult.exitStatus,
+                    timedOut: previousTimedOut || result.timedOut || codesignResult.timedOut,
+                    usedFallback: usedFallback
+                )
+            }
+
+            let reason: String
+            if codesignResult.timedOut {
+                reason = "codesign_timed_out"
+            } else if codesignResult.exitStatus == 0 {
+                reason = "gatekeeper_rejected_signature_valid"
+            } else if isUnsignedAssessment(combinedOutput) {
+                reason = "unsigned_or_unnotarized"
+            } else {
+                reason = "assessment_rejected_unverified"
+            }
+
+            return AppSecurityAssessment(
+                result: .unverified,
+                tool: tool,
+                refinementTool: "codesign",
+                reason: reason,
+                summary: compactAssessmentOutput(combinedOutput),
+                exitStatus: result.exitStatus,
+                refinementExitStatus: codesignResult.exitStatus,
+                timedOut: previousTimedOut || result.timedOut || codesignResult.timedOut,
+                usedFallback: usedFallback
+            )
+        } catch {
+            let combinedOutput = primaryOutput + "\n" + String(describing: error)
+            if let reason = blockedSecurityReason(in: combinedOutput) {
+                return AppSecurityAssessment(
+                    result: .blocked,
+                    tool: tool,
+                    refinementTool: "codesign",
+                    reason: reason,
+                    summary: compactAssessmentOutput(combinedOutput),
+                    exitStatus: result.exitStatus,
+                    refinementExitStatus: nil,
+                    timedOut: previousTimedOut || result.timedOut,
+                    usedFallback: usedFallback
+                )
+            }
+
+            return AppSecurityAssessment(
+                result: .unverified,
+                tool: tool,
+                refinementTool: "codesign",
+                reason: "codesign_failed_to_run",
+                summary: compactAssessmentOutput(combinedOutput),
+                exitStatus: result.exitStatus,
+                refinementExitStatus: nil,
+                timedOut: previousTimedOut || result.timedOut,
+                usedFallback: usedFallback
+            )
+        }
+    }
+
+    private nonisolated func blockedSecurityReason(in output: String) -> String? {
+        let lowercasedOutput = output.lowercased()
+        let blockedPatterns: [(pattern: String, reason: String)] = [
+            ("xprotect", "xprotect_blocked"),
+            ("malware", "malware_blocked"),
+            ("revoked", "signature_revoked"),
+            ("code or signature have been modified", "signature_modified"),
+            ("invalid signature", "invalid_signature"),
+            ("a sealed resource is missing or invalid", "sealed_resource_invalid"),
+            ("sealed resource", "sealed_resource_invalid"),
+            ("the code has been modified", "signature_modified"),
+            ("damaged", "app_damaged")
+        ]
+
+        return blockedPatterns.first { lowercasedOutput.contains($0.pattern) }?.reason
+    }
+
+    private nonisolated func isUnsignedAssessment(_ output: String) -> Bool {
+        let lowercasedOutput = output.lowercased()
+        return lowercasedOutput.contains("code object is not signed at all")
+            || lowercasedOutput.contains("source=no usable signature")
+            || lowercasedOutput.contains("unsigned")
+            || lowercasedOutput.contains("not notarized")
+            || lowercasedOutput.contains("unidentified developer")
+            || lowercasedOutput.contains("unknown developer")
+            || lowercasedOutput.contains("developer cannot be verified")
+    }
+
+    private nonisolated func compactAssessmentOutput(_ output: String) -> String {
+        String(DiagnosticLogger.compact(output).prefix(500))
+    }
+
+    private nonisolated func runAssessmentProcess(
+        executableURL: URL,
+        arguments: [String],
+        timeout: TimeInterval
+    ) throws -> AssessmentProcessResult {
+        let task = Process()
+        task.executableURL = executableURL
+        task.arguments = arguments
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        task.standardOutput = outputPipe
+        task.standardError = errorPipe
+
+        let semaphore = DispatchSemaphore(value: 0)
+        task.terminationHandler = { _ in
+            semaphore.signal()
+        }
+
+        try task.run()
+
+        var timedOut = false
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            timedOut = true
+            DiagnosticLogger.shared.diagnostic(
+                "Assessment process timed out: \(executableURL.lastPathComponent) \(arguments.joined(separator: " "))"
+            )
+            let processIdentifier = task.processIdentifier
+            task.terminate()
+            if semaphore.wait(timeout: .now() + 1) == .timedOut {
+                kill(processIdentifier, SIGKILL)
+                _ = semaphore.wait(timeout: .now() + 1)
+            }
+        }
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let standardOutput = String(data: outputData, encoding: .utf8) ?? ""
+        let standardError = String(data: errorData, encoding: .utf8) ?? ""
+
+        return AssessmentProcessResult(
+            exitStatus: task.isRunning ? nil : task.terminationStatus,
+            standardOutput: standardOutput,
+            standardError: standardError,
+            timedOut: timedOut
+        )
+    }
+
+    private func quarantineDecision(
+        for assessment: AppSecurityAssessment,
+        appName: String
+    ) async -> QuarantineDecision {
+        switch assessment.result {
+        case .passed:
+            return .removeQuarantine
+
+        case .unverified:
+            if UserPreferences.shared.removeQuarantineForUnverifiedApps {
+                return .removeQuarantine
+            }
+            return await showUnverifiedAppQuarantineDialog(appName: appName)
+
+        case .blocked:
+            return await showBlockedAppQuarantineDialog(appName: appName)
+        }
+    }
+
+    private func showUnverifiedAppQuarantineDialog(appName: String) async -> QuarantineDecision {
+        let displayName = appName.strippingAppSuffix
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "macOS couldn't verify “\(displayName)”"
+                alert.informativeText = [
+                    "This is common with some independent apps.",
+                    "",
+                    "EasyDMG can remove the download quarantine so the app runs from Applications instead of a randomized translocation path. Only continue for apps from sources you trust.",
+                    "",
+                    "You can skip this prompt in Settings by enabling Compatibility Mode."
+                ].joined(separator: "\n")
+
+                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+                   let icon = NSImage(contentsOfFile: iconPath) {
+                    alert.icon = icon
+                }
+
+                alert.addButton(withTitle: "Remove Quarantine & Install")
+                alert.addButton(withTitle: "Handle Manually")
+                alert.addButton(withTitle: "Cancel")
+
+                presentHostedAlert(alert) { response in
+                    switch response {
+                    case .alertFirstButtonReturn:
+                        continuation.resume(returning: .removeQuarantine)
+                    case .alertSecondButtonReturn:
+                        continuation.resume(returning: .handleManually)
+                    default:
+                        continuation.resume(returning: .cancel)
+                    }
+                }
+            }
+        }
+    }
+
+    private func showBlockedAppQuarantineDialog(appName: String) async -> QuarantineDecision {
+        let displayName = appName.strippingAppSuffix
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.alertStyle = .critical
+                alert.messageText = "“\(displayName)” appears damaged or unsafe"
+                alert.informativeText = "EasyDMG will not remove quarantine automatically because macOS found a stronger security or integrity problem."
+
+                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+                   let icon = NSImage(contentsOfFile: iconPath) {
+                    alert.icon = icon
+                }
+
+                alert.addButton(withTitle: "Handle Manually")
+                alert.addButton(withTitle: "Cancel")
+
+                presentHostedAlert(alert) { response in
+                    if response == .alertFirstButtonReturn {
+                        continuation.resume(returning: .handleManually)
+                    } else {
+                        continuation.resume(returning: .cancel)
+                    }
+                }
+            }
+        }
     }
 
     // This prevents apps with auto-update mechanisms from incorrectly detecting

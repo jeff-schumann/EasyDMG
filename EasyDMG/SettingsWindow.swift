@@ -358,6 +358,16 @@ struct SettingsTabView: View {
                     Toggle("Open app after installation", isOn: $preferences.openAppAfterInstall)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
+                    Toggle("Compatibility Mode: remove quarantine for unverified apps", isOn: $preferences.removeQuarantineForUnverifiedApps)
+                        .toggleStyle(SettingsCheckboxStyle(theme: theme))
+
+                    if preferences.removeQuarantineForUnverifiedApps {
+                        Text("⚠️ Removes the download quarantine from apps macOS cannot verify. This can bypass Gatekeeper’s first-open warning on macOS 13 and later. Use only for apps from sources you trust.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(SettingsPalette.gold)
+                            .lineSpacing(3)
+                    }
+
                     if preferences.autoInstallNewerVersions {
                         Toggle("Always install newer versions without asking", isOn: $preferences.autoInstallNewerVersions)
                             .toggleStyle(SettingsCheckboxStyle(theme: theme))
@@ -670,6 +680,10 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(openAppAfterInstall, forKey: "openAppAfterInstall") }
     }
 
+    @Published var removeQuarantineForUnverifiedApps: Bool {
+        didSet { UserDefaults.standard.set(removeQuarantineForUnverifiedApps, forKey: "removeQuarantineForUnverifiedApps") }
+    }
+
     @Published var feedbackMode: FeedbackMode {
         didSet { UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode") }
     }
@@ -684,6 +698,7 @@ class UserPreferences: ObservableObject {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
         self.openAppAfterInstall = UserDefaults.standard.object(forKey: "openAppAfterInstall") as? Bool ?? false
+        self.removeQuarantineForUnverifiedApps = UserDefaults.standard.object(forKey: "removeQuarantineForUnverifiedApps") as? Bool ?? false
         self.autoInstallNewerVersions = UserDefaults.standard.object(forKey: "autoInstallNewerVersions") as? Bool ?? false
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
