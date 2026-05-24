@@ -679,6 +679,45 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    private nonisolated final class ProcessPipeCollector: @unchecked Sendable {
+        private let pipe: Pipe
+        private let lock = NSLock()
+        private let readGroup = DispatchGroup()
+        private var collectedData = Data()
+
+        init(pipe: Pipe) {
+            self.pipe = pipe
+        }
+
+        func startReading() {
+            readGroup.enter()
+            DispatchQueue.global(qos: .utility).async { [self] in
+                while true {
+                    let data = pipe.fileHandleForReading.availableData
+                    if data.isEmpty {
+                        break
+                    }
+
+                    lock.lock()
+                    collectedData.append(data)
+                    lock.unlock()
+                }
+
+                readGroup.leave()
+            }
+        }
+
+        func data(waitForEOF: Bool) -> Data {
+            if waitForEOF {
+                readGroup.wait()
+            }
+
+            lock.lock()
+            defer { lock.unlock() }
+            return collectedData
+        }
+    }
+
     private struct AppSecurityAssessment: Sendable {
         let result: AppSecurityAssessmentResult
         let tool: String
@@ -689,6 +728,34 @@ class DMGProcessor: ObservableObject {
         let refinementExitStatus: Int32?
         let timedOut: Bool
         let usedFallback: Bool
+        let previousTool: String?
+        let previousTimedOut: Bool
+
+        nonisolated init(
+            result: AppSecurityAssessmentResult,
+            tool: String,
+            refinementTool: String?,
+            reason: String,
+            summary: String,
+            exitStatus: Int32?,
+            refinementExitStatus: Int32?,
+            timedOut: Bool,
+            usedFallback: Bool,
+            previousTool: String? = nil,
+            previousTimedOut: Bool = false
+        ) {
+            self.result = result
+            self.tool = tool
+            self.refinementTool = refinementTool
+            self.reason = reason
+            self.summary = summary
+            self.exitStatus = exitStatus
+            self.refinementExitStatus = refinementExitStatus
+            self.timedOut = timedOut
+            self.usedFallback = usedFallback
+            self.previousTool = previousTool
+            self.previousTimedOut = previousTimedOut
+        }
 
         var manualFallbackReason: ManualFallbackReason {
             result == .blocked ? .securityAssessmentBlocked : .securityAssessmentUnverified
@@ -705,6 +772,11 @@ class DMGProcessor: ObservableObject {
 
             if let refinementTool {
                 details["assessment_refinement_tool"] = refinementTool
+            }
+
+            if let previousTool {
+                details["assessment_previous_tool"] = previousTool
+                details["assessment_previous_timeout"] = previousTimedOut ? "true" : "false"
             }
 
             if let exitStatus {
@@ -2633,6 +2705,7 @@ class DMGProcessor: ObservableObject {
 
         let errorPipe = Pipe()
         task.standardError = errorPipe
+        let errorCollector = ProcessPipeCollector(pipe: errorPipe)
 
         let semaphore = DispatchSemaphore(value: 0)
         task.terminationHandler = { _ in
@@ -2640,6 +2713,7 @@ class DMGProcessor: ObservableObject {
         }
 
         try task.run()
+        errorCollector.startReading()
 
         var timedOut = false
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
@@ -2657,12 +2731,8 @@ class DMGProcessor: ObservableObject {
         }
 
         let errorOutput: String
-        if task.isRunning {
-            errorOutput = ""
-        } else {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            errorOutput = String(data: errorData, encoding: .utf8) ?? ""
-        }
+        let errorData = errorCollector.data(waitForEOF: !task.isRunning)
+        errorOutput = String(data: errorData, encoding: .utf8) ?? ""
 
         return ProcessRunResult(
             exitStatus: task.isRunning ? nil : task.terminationStatus,
@@ -2835,8 +2905,10 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(previousSummary),
                 exitStatus: nil,
                 refinementExitStatus: nil,
-                timedOut: previousTimedOut,
-                usedFallback: usedFallback
+                timedOut: false,
+                usedFallback: usedFallback,
+                previousTool: previousTool,
+                previousTimedOut: previousTimedOut
             )
         }
 
@@ -2857,7 +2929,9 @@ class DMGProcessor: ObservableObject {
                     exitStatus: result.exitStatus,
                     refinementExitStatus: nil,
                     timedOut: true,
-                    usedFallback: usedFallback
+                    usedFallback: usedFallback,
+                    previousTool: previousTool,
+                    previousTimedOut: previousTimedOut
                 )
             }
 
@@ -2870,8 +2944,10 @@ class DMGProcessor: ObservableObject {
                     summary: compactAssessmentOutput(result.combinedOutput),
                     exitStatus: result.exitStatus,
                     refinementExitStatus: nil,
-                    timedOut: previousTimedOut,
-                    usedFallback: usedFallback
+                    timedOut: false,
+                    usedFallback: usedFallback,
+                    previousTool: previousTool,
+                    previousTimedOut: previousTimedOut
                 )
             }
 
@@ -2879,8 +2955,9 @@ class DMGProcessor: ObservableObject {
                 tool: "spctl",
                 result: result,
                 appPath: appPath,
-                usedFallback: usedFallback,
-                previousTimedOut: previousTimedOut
+            usedFallback: usedFallback,
+            previousTool: previousTool,
+            previousTimedOut: previousTimedOut
             )
         } catch {
             return AppSecurityAssessment(
@@ -2891,8 +2968,10 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(previousSummary + "\n" + String(describing: error)),
                 exitStatus: nil,
                 refinementExitStatus: nil,
-                timedOut: previousTimedOut,
-                usedFallback: usedFallback
+                timedOut: false,
+                usedFallback: usedFallback,
+                previousTool: previousTool,
+                previousTimedOut: previousTimedOut
             )
         }
     }
@@ -2902,6 +2981,7 @@ class DMGProcessor: ObservableObject {
         result: AssessmentProcessResult,
         appPath: String,
         usedFallback: Bool,
+        previousTool: String? = nil,
         previousTimedOut: Bool
     ) -> AppSecurityAssessment {
         let codesignURL = URL(fileURLWithPath: "/usr/bin/codesign")
@@ -2917,8 +2997,10 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(primaryOutput),
                 exitStatus: result.exitStatus,
                 refinementExitStatus: nil,
-                timedOut: previousTimedOut || result.timedOut,
-                usedFallback: usedFallback
+                timedOut: result.timedOut,
+                usedFallback: usedFallback,
+                previousTool: previousTool,
+                previousTimedOut: previousTimedOut
             )
         }
 
@@ -2939,8 +3021,10 @@ class DMGProcessor: ObservableObject {
                     summary: compactAssessmentOutput(combinedOutput),
                     exitStatus: result.exitStatus,
                     refinementExitStatus: codesignResult.exitStatus,
-                    timedOut: previousTimedOut || result.timedOut || codesignResult.timedOut,
-                    usedFallback: usedFallback
+                    timedOut: result.timedOut || codesignResult.timedOut,
+                    usedFallback: usedFallback,
+                    previousTool: previousTool,
+                    previousTimedOut: previousTimedOut
                 )
             }
 
@@ -2963,8 +3047,10 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(combinedOutput),
                 exitStatus: result.exitStatus,
                 refinementExitStatus: codesignResult.exitStatus,
-                timedOut: previousTimedOut || result.timedOut || codesignResult.timedOut,
-                usedFallback: usedFallback
+                timedOut: result.timedOut || codesignResult.timedOut,
+                usedFallback: usedFallback,
+                previousTool: previousTool,
+                previousTimedOut: previousTimedOut
             )
         } catch {
             let combinedOutput = primaryOutput + "\n" + String(describing: error)
@@ -2977,8 +3063,10 @@ class DMGProcessor: ObservableObject {
                     summary: compactAssessmentOutput(combinedOutput),
                     exitStatus: result.exitStatus,
                     refinementExitStatus: nil,
-                    timedOut: previousTimedOut || result.timedOut,
-                    usedFallback: usedFallback
+                    timedOut: result.timedOut,
+                    usedFallback: usedFallback,
+                    previousTool: previousTool,
+                    previousTimedOut: previousTimedOut
                 )
             }
 
@@ -2990,8 +3078,10 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(combinedOutput),
                 exitStatus: result.exitStatus,
                 refinementExitStatus: nil,
-                timedOut: previousTimedOut || result.timedOut,
-                usedFallback: usedFallback
+                timedOut: result.timedOut,
+                usedFallback: usedFallback,
+                previousTool: previousTool,
+                previousTimedOut: previousTimedOut
             )
         }
     }
@@ -3096,6 +3186,8 @@ class DMGProcessor: ObservableObject {
         let errorPipe = Pipe()
         task.standardOutput = outputPipe
         task.standardError = errorPipe
+        let outputCollector = ProcessPipeCollector(pipe: outputPipe)
+        let errorCollector = ProcessPipeCollector(pipe: errorPipe)
 
         let semaphore = DispatchSemaphore(value: 0)
         task.terminationHandler = { _ in
@@ -3103,6 +3195,8 @@ class DMGProcessor: ObservableObject {
         }
 
         try task.run()
+        outputCollector.startReading()
+        errorCollector.startReading()
 
         var timedOut = false
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
@@ -3118,8 +3212,9 @@ class DMGProcessor: ObservableObject {
             }
         }
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let shouldWaitForPipeEOF = !task.isRunning
+        let outputData = outputCollector.data(waitForEOF: shouldWaitForPipeEOF)
+        let errorData = errorCollector.data(waitForEOF: shouldWaitForPipeEOF)
         let standardOutput = String(data: outputData, encoding: .utf8) ?? ""
         let standardError = String(data: errorData, encoding: .utf8) ?? ""
 
