@@ -13,6 +13,12 @@ import AppKit
 enum SettingsPalette {
     static let amber        = Color(hex: "D28438")
     static let gold         = Color(hex: "E9A440")
+    static let warningText  = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.darkAqua, .vibrantDark]) != nil
+        return isDark
+            ? NSColor(srgbRed: 0xFF / 255, green: 0xCC / 255, blue: 0x6D / 255, alpha: 1)
+            : NSColor(srgbRed: 0xC7 / 255, green: 0x71 / 255, blue: 0x00 / 255, alpha: 1)
+    })
     static let sand         = Color(hex: "F1CB9C")
     static let walnut       = Color(hex: "643E26")
     static let darkAmber    = Color(hex: "B8621A")

@@ -339,6 +339,7 @@ struct SettingsTabView: View {
     let theme: SettingsTheme
     @StateObject private var notificationPermissions = NotificationPermissionViewModel()
     @EnvironmentObject private var viewModel: CheckForUpdatesViewModel
+    @State private var unverifiedWarningDismissed = false
 
     var body: some View {
         ScrollView {
@@ -360,12 +361,24 @@ struct SettingsTabView: View {
 
                     Toggle("Do not warn me about unverified apps", isOn: $preferences.skipUnverifiedAppWarning)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
+                        .onChange(of: preferences.skipUnverifiedAppWarning) { newValue in
+                            if newValue {
+                                unverifiedWarningDismissed = false
+                            }
+                        }
 
-                    if preferences.skipUnverifiedAppWarning {
-                        Text("⚠️ EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download.")
+                    if preferences.skipUnverifiedAppWarning && !unverifiedWarningDismissed {
+                        Text("⚠️ EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download. Click this message to hide.")
                             .font(.system(size: 11.5))
-                            .foregroundStyle(SettingsPalette.gold)
+                            .foregroundStyle(SettingsPalette.warningText)
                             .lineSpacing(3)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.35)) {
+                                    unverifiedWarningDismissed = true
+                                }
+                            }
+                            .transition(.opacity)
                     }
 
                     if preferences.autoInstallNewerVersions {
