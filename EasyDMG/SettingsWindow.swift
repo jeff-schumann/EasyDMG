@@ -359,13 +359,30 @@ struct SettingsTabView: View {
                     Toggle("Open app after installation", isOn: $preferences.openAppAfterInstall)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
-                    Toggle("Do not warn me about unverified apps", isOn: $preferences.skipUnverifiedAppWarning)
-                        .toggleStyle(SettingsCheckboxStyle(theme: theme))
-                        .onChange(of: preferences.skipUnverifiedAppWarning) { newValue in
-                            if newValue {
-                                unverifiedWarningDismissed = false
+                    HStack(spacing: 6) {
+                        Toggle("Do not warn me about unverified apps", isOn: $preferences.skipUnverifiedAppWarning)
+                            .toggleStyle(SettingsCheckboxStyle(theme: theme))
+                            .onChange(of: preferences.skipUnverifiedAppWarning) { newValue in
+                                if newValue {
+                                    unverifiedWarningDismissed = false
+                                }
                             }
+
+                        if preferences.skipUnverifiedAppWarning && unverifiedWarningDismissed {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.35)) {
+                                    unverifiedWarningDismissed = false
+                                }
+                            } label: {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(SettingsPalette.warningText)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Show the unverified apps warning")
+                            .transition(.opacity)
                         }
+                    }
 
                     if preferences.skipUnverifiedAppWarning && !unverifiedWarningDismissed {
                         Text("⚠️ EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download. Click this message to hide.")
