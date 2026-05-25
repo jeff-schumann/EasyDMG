@@ -377,6 +377,7 @@ struct SettingsTabView: View {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(SettingsPalette.warningText)
+                                    .offset(y: 1)
                             }
                             .buttonStyle(.plain)
                             .help("Show the unverified apps warning")

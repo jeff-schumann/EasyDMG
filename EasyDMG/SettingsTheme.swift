@@ -16,7 +16,7 @@ enum SettingsPalette {
     static let warningText  = Color(nsColor: NSColor(name: nil) { appearance in
         let isDark = appearance.bestMatch(from: [.darkAqua, .vibrantDark]) != nil
         return isDark
-            ? NSColor(srgbRed: 0xFF / 255, green: 0xCC / 255, blue: 0x6D / 255, alpha: 1)
+            ? NSColor(srgbRed: 0xFF / 255, green: 0xD8 / 255, blue: 0x91 / 255, alpha: 1)
             : NSColor(srgbRed: 0xC7 / 255, green: 0x71 / 255, blue: 0x00 / 255, alpha: 1)
     })
     static let sand         = Color(hex: "F1CB9C")
