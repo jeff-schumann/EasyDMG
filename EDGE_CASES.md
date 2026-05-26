@@ -2,7 +2,7 @@
 
 This document tracks edge cases that could affect automatic DMG installation. It is intentionally conservative: EasyDMG should automate only the boring, common case and fall back to manual installation when a DMG looks unusual.
 
-**Last updated**: 2026-05-03
+**Last updated**: 2026-05-26
 
 ## Current Rule of Thumb
 
@@ -99,3 +99,23 @@ Copying without enough free space could leave a partial app behind.
 Not every directory ending in `.app` is necessarily a normal launchable app bundle.
 
 **Current behavior**: Before copying a single app candidate, EasyDMG verifies `Contents/Info.plist`, requires `CFBundlePackageType == APPL`, requires a non-empty `CFBundleExecutable`, and checks that the referenced executable exists and is executable. If validation fails, it falls back to manual installation.
+
+### 23. Quitting Running App Instances - Rating: 2/10 - RESOLVED
+
+Attempting to overwrite a running application bundle can cause system errors, lockups, or leave the running process bound to the old deleted files. Furthermore, "Open after install" would target the stale, running copy instead of the new version.
+
+**Current behavior**: EasyDMG checks the target bundle identifier in `/Applications` before starting the copy. If a process with that identifier is running, it prompts the user to quit it before proceeding. If the user cancels, the install aborts cleanly.
+
+### 24. App Management TCC & MAS/Root Safeguards - Rating: 3/10 - RESOLVED
+
+Replacing an app in `/Applications` can fail mid-install due to TCC (App Management) permissions, leaving a partially copied bundle. Additionally, replacing a Mac App Store (MAS) app or a root-owned app with a direct-download DMG would break future App Store update paths.
+
+**Current behavior**: Before writing, EasyDMG probes permissions with a non-destructive, no-op modification date write. If blocked, it diagnoses the cause:
+- **MAS / Root Owned**: If the app contains App Store receipt markers (`MASReceipt` or `com.apple.appstore` attributes) or is owned by root, automatic replacement is blocked to protect system safety and App Store update integrity.
+- **TCC Permission**: If blocked by standard TCC, it prompts the user with an interactive helper dialog, waits for permission to be granted in System Settings, and retries.
+
+### 25. Password-Protected or Encrypted DMGs - Rating: 1/10 - RESOLVED
+
+Attempting to mount password-protected DMGs non-interactively can cause the process to hang or fail silently.
+
+**Current behavior**: EasyDMG inspects `hdiutil attach` errors. If it detects authentication, passphrase, or encryption keywords, it classifies the DMG as `.passwordProtected` and gracefully falls back to opening the DMG via DiskImageMounter so macOS can show the interactive password prompt.
