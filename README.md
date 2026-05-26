@@ -29,7 +29,7 @@ After setting EasyDMG as your default app for opening DMGs (instructions below -
 - **Flexible settings**: Choose between progress window, notifications, or silent mode
 - **Save disk space**: Optionally moves DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
 - **Cautious by default**: If EasyDMG encounters anything unusual (license agreements, multiple apps, pkg installers), it opens the DMG and lets you handle it manually. It only automates the simple, common case.
-- **Smart security**: EasyDMG automatically verifies downloaded apps with macOS Gatekeeper. For safe apps, this means no more trips to System Settings > Privacy & Security just to open them! See [SECURITY.md](.github/SECURITY.md) for details.
+- **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, the rest take one click, and you can disable the prompt entirely in Settings. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 - **Automatic updates**: Built-in Sparkle integration for easy updates
 
 ## Screenshots

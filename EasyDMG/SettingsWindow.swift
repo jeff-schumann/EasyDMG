@@ -360,7 +360,7 @@ struct SettingsTabView: View {
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     HStack(spacing: 6) {
-                        Toggle("Do not warn me about unverified apps", isOn: $preferences.skipUnverifiedAppWarning)
+                        Toggle("Do not warn me about apps from unidentified developers", isOn: $preferences.skipUnverifiedAppWarning)
                             .toggleStyle(SettingsCheckboxStyle(theme: theme))
                             .onChange(of: preferences.skipUnverifiedAppWarning) { newValue in
                                 if newValue {
@@ -380,7 +380,7 @@ struct SettingsTabView: View {
                                     .offset(y: 1)
                             }
                             .buttonStyle(.plain)
-                            .help("Show the unverified apps warning")
+                            .help("Show the unidentified developer warning")
                             .transition(.opacity)
                         }
                     }

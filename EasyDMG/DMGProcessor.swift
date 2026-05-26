@@ -3338,7 +3338,7 @@ class DMGProcessor: ObservableObject {
             alert.alertStyle = .warning
             alert.messageText = "macOS can't verify “\(displayName)”"
             alert.informativeText = [
-                "This often happens with apps from smaller developers. EasyDMG can install it anyway, but only continue if you trust the developer.",
+                "macOS can't confirm this app is free of malware. Only continue if you trust the source.",
                 "",
                 "You can turn off this warning in Settings."
             ].joined(separator: "\n")
@@ -3349,7 +3349,7 @@ class DMGProcessor: ObservableObject {
             }
 
             alert.addButton(withTitle: "Continue Install")
-            alert.addButton(withTitle: "Inspect")
+            alert.addButton(withTitle: "Open in Finder")
             alert.addButton(withTitle: "Cancel")
 
             presentHostedAlert(alert) { response in
@@ -3378,7 +3378,7 @@ class DMGProcessor: ObservableObject {
                 alert.icon = icon
             }
 
-            alert.addButton(withTitle: "Inspect")
+            alert.addButton(withTitle: "Open in Finder")
             alert.addButton(withTitle: "Cancel")
 
             presentHostedAlert(alert) { response in

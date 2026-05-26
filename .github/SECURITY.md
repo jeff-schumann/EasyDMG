@@ -4,12 +4,6 @@
 
 EasyDMG security fixes are targeted at the latest published release.
 
-| Version | Supported |
-| --- | --- |
-| 1.1.x | :white_check_mark: |
-| 1.0.x | :x: |
-| < 1.0 | :x: |
-
 If you are reporting a security issue, please confirm the affected EasyDMG version and your macOS version in the report.
 
 ## Security & Quarantine Architecture
@@ -28,7 +22,7 @@ When processing a `.app` bundle, EasyDMG performs a multi-stage security preflig
 The app is categorized into one of three security states to determine how the `com.apple.quarantine` attribute is handled:
 
 *   **Verified (Notarized / Gatekeeper Approved)**: The app passes all checks. EasyDMG automatically removes the quarantine attribute to prevent App Translocation and enable seamless background updates.
-*   **Unverified (Unsigned / Unidentified Developer)**: No malware or tampering is detected, but the developer cannot be verified. EasyDMG prompts the user with a warning before stripping the quarantine attribute. This prompt can be globally bypassed in Settings by enabling **Compatibility Mode**.
+*   **Unverified (Unsigned / Unidentified Developer)**: No malware or tampering is detected, but the developer cannot be verified. EasyDMG prompts the user with a warning before stripping the quarantine attribute. This prompt can be globally bypassed by enabling **Do not warn me about apps from unidentified developers** in Settings.
 *   **Blocked (Malware / Revoked / Damaged)**: If macOS reports active malware, a revoked signature, or a tampered/damaged bundle, EasyDMG **refuses** to automatically remove quarantine and restricts options to canceling or manual installation.
 
 ## Reporting a Vulnerability
@@ -52,4 +46,4 @@ Please allow time for investigation and a fix before making a vulnerability publ
 
 If a report turns out to be a general bug rather than a security issue, it may be redirected to the public issue tracker:
 
-<https://github.com/jefe-johann/EasyDMG/issues>
+<https://github.com/jeff-schumann/EasyDMG/issues>
