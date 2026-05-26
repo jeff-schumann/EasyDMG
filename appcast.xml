@@ -9,14 +9,28 @@
             <sparkle:shortVersionString>2.1.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <description><![CDATA[
+<style>
+  section[data-sparkle-version] {
+    margin-bottom: 1em;
+  }
+
+  .sparkle-installed-version,
+  .sparkle-installed-version ~ section[data-sparkle-version] {
+    display: none;
+  }
+</style>
+
+<section data-sparkle-version="11">
 <h2>EasyDMG 2.1.1</h2>
 <p>This update keeps the Sparkle update/install window visible throughout the update flow.</p>
 <ul>
   <li>Fixed an issue where the update progress or install panel could disappear behind other apps after clicking Install.</li>
 </ul>
+</section>
 
-<h3>Also included from EasyDMG 2.1.0</h3>
-<p>Most users updating from EasyDMG 2.0.0 will see these improvements for the first time.</p>
+<section data-sparkle-version="10">
+<h2>EasyDMG 2.1.0</h2>
+<p>This update focuses on smoother app replacements, clearer macOS permission handling, and a more reliable install flow.</p>
 <ul>
   <li>Improved replacing apps in Applications with version comparison, clearer Replace messaging, and an option to automatically install newer versions.</li>
   <li>Added guided handling for macOS App Management permission so EasyDMG can recover gracefully instead of failing mid-install.</li>
@@ -25,6 +39,18 @@
   <li>Added an option to open the installed app automatically after EasyDMG finishes.</li>
   <li>Improved DMG cleanup/unmount reliability, progress window readability, and support links.</li>
 </ul>
+</section>
+
+<section data-sparkle-version="9">
+<h2>EasyDMG 2.0.0</h2>
+<p>This is the biggest EasyDMG update yet: a full settings redesign, deeper stability work, and smarter decisions when DMGs get weird.</p>
+<ul>
+  <li>Rebuilt the settings window with a more polished design, clearer setup flow, and stronger light/dark mode support.</li>
+  <li>Greatly improved fallback handling for installer-style DMGs, helper apps, multiple-app volumes, and unusual app bundles.</li>
+  <li>Hardened notifications, launch handling, and diagnostic logging so success, fallback, and error states are easier to trust and troubleshoot.</li>
+  <li>Expanded compatibility to macOS 13.0 and later.</li>
+</ul>
+</section>
 ]]></description>
             <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v2.1.1/EasyDMG_v2.1.1.dmg" length="4487143" type="application/octet-stream" sparkle:edSignature="L5UTBLSsClLwKty7BL6vhkzCjsgdd1Mkj0DSxeHGah3XmNNlpiTS9hxAkFcw10eCc6b0L9/hdmp/eepwSS6VCQ=="/>
         </item>
