@@ -20,6 +20,8 @@
   }
 </style>
 
+<p>What's new since your last update:</p>
+
 <section data-sparkle-version="11">
 <h2>EasyDMG 2.1.1</h2>
 <p>This update keeps the Sparkle update/install window visible throughout the update flow.</p>
