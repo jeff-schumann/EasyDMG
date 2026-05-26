@@ -292,12 +292,12 @@ struct AboutTabView: View {
                     .foregroundStyle(theme.text)
                     .lineSpacing(3)
 
-                Text("The standard DMG workflow is clunky and annoying: mount the DMG, drag the app to Applications, go find it in Applications, eject the disk, and then send the DMG to the trash (or forgetting the last two steps, and having a GB of old DMGs in your downloads folder 🫠).")
+                Text("The standard DMG workflow is clunky and annoying: mount the DMG, drag the app to Applications, go find it in Applications, eject the disk, and then send the DMG to the trash - or forgetting the last two steps, and having a GB of old DMGs in your downloads folder 🫠.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(theme.muted)
                     .lineSpacing(3)
 
-                Text("EasyDMG is a simple, tiny utility that handles all of those steps automatically: mount, install, tidy up, done! The app doesn't need to be running - no dock icon, no menu bar icon, it just opens when needed and closes when finished.")
+                Text("EasyDMG is a simple, tiny utility that handles all of those steps from a double-click: mount, install, tidy up, done! The app doesn't need to be running - no dock icon, no menu bar icon, it just opens when needed and closes when finished.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(theme.muted)
                     .lineSpacing(3)

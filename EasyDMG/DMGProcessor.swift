@@ -2136,6 +2136,7 @@ class DMGProcessor: ObservableObject {
                         action: nil
                     )
                     checkbox.state = .off
+                    checkbox.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     checkbox.sizeToFit()
                     alert.accessoryView = checkbox
                     suppressCheckbox = checkbox
