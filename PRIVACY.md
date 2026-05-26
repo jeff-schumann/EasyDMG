@@ -1,6 +1,6 @@
 # Privacy Policy for EasyDMG
 
-Effective date: April 7, 2026
+Effective date: May 26, 2026
 
 EasyDMG is designed to process disk image files locally on your Mac. This Privacy Policy explains what information the app handles, what information it does not collect, and when limited network activity can occur.
 
@@ -8,7 +8,7 @@ EasyDMG is designed to process disk image files locally on your Mac. This Privac
 
 EasyDMG does not create user accounts, does not include advertising, and does not include analytics, telemetry, or crash-reporting services in the current version of the app.
 
-Most EasyDMG activity happens entirely on your device. The main exception is update-related network activity handled through Sparkle, the app's software update framework, and any links you choose to open manually.
+Most EasyDMG activity happens entirely on your device. The main exceptions are update-related network activity handled through Sparkle (the app's software update framework), macOS-managed security checks that may contact Apple's servers to verify an app's notarization status before installation, and any links you choose to open manually.
 
 ## Information EasyDMG Processes on Your Device
 
@@ -80,6 +80,14 @@ In practical terms, this means GitHub may receive standard request data associat
 The current app configuration enables automatic update checks by default. The current app configuration does not enable Sparkle's optional system profiling setting.
 
 You can turn automatic update checks off in EasyDMG's Settings window.
+
+### Gatekeeper Security Checks
+
+Before copying an app to `/Applications`, EasyDMG runs macOS's built-in security tools (`spctl` and `codesign`) to assess whether the app is properly signed and notarized. These are the same checks macOS performs when launching a downloaded app.
+
+Most of these checks run entirely on your device. However, when an app's notarization ticket is not embedded in the app bundle, macOS may contact Apple's notarization service to confirm the app is notarized. macOS may also contact Apple for certificate validation as part of standard system behavior. EasyDMG does not control what information these system tools send to Apple; that activity is governed by Apple's own privacy practices.
+
+Apple Platform Privacy Policy: https://www.apple.com/legal/privacy/
 
 ### Links You Open Yourself
 

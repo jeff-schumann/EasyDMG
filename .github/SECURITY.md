@@ -8,14 +8,13 @@ If you are reporting a security issue, please confirm the affected EasyDMG versi
 
 ## Security & Quarantine Architecture
 
-To balance convenience with system safety, EasyDMG performs a security preflight check using macOS security systems (`syspolicy_check`, `spctl`, and `codesign`) before deciding whether to remove quarantine attributes from a copied application.
+To balance convenience with system safety, EasyDMG performs a security preflight check using macOS security tools (`spctl` and `codesign`) before deciding whether to remove quarantine attributes from a copied application.
 
 ### App Security Assessment
 
 When processing a `.app` bundle, EasyDMG performs a multi-stage security preflight check:
-1. **Primary Assessment**: Verifies the application's distribution status using `syspolicy_check`.
-2. **Fallback Assessment**: Falls back to `spctl` verification if `syspolicy_check` is unavailable or times out.
-3. **Diagnostics Refinement**: If primary checks fail, executes deep verification with `codesign` to identify the precise cause of failure.
+1. **Primary Assessment**: Runs `spctl --assess --type execute` to match macOS's launch-time Gatekeeper decision. Stapled apps are verified locally; unstapled-but-notarized apps trigger an online lookup with Apple's notary service.
+2. **Diagnostics Refinement**: If `spctl` rejects the app, EasyDMG runs `codesign --verify --deep --strict` to identify the precise cause (revoked signature, tampered bundle, unsigned, etc.).
 
 ### Handling and Quarantine Decisions
 

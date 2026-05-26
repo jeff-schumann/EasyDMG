@@ -778,9 +778,6 @@ class DMGProcessor: ObservableObject {
         let exitStatus: Int32?
         let refinementExitStatus: Int32?
         let timedOut: Bool
-        let usedFallback: Bool
-        let previousTool: String?
-        let previousTimedOut: Bool
 
         nonisolated init(
             result: AppSecurityAssessmentResult,
@@ -790,10 +787,7 @@ class DMGProcessor: ObservableObject {
             summary: String,
             exitStatus: Int32?,
             refinementExitStatus: Int32?,
-            timedOut: Bool,
-            usedFallback: Bool,
-            previousTool: String? = nil,
-            previousTimedOut: Bool = false
+            timedOut: Bool
         ) {
             self.result = result
             self.tool = tool
@@ -803,9 +797,6 @@ class DMGProcessor: ObservableObject {
             self.exitStatus = exitStatus
             self.refinementExitStatus = refinementExitStatus
             self.timedOut = timedOut
-            self.usedFallback = usedFallback
-            self.previousTool = previousTool
-            self.previousTimedOut = previousTimedOut
         }
 
         var manualFallbackReason: ManualFallbackReason {
@@ -817,17 +808,11 @@ class DMGProcessor: ObservableObject {
                 "assessment_tool": tool,
                 "assessment_result": result.rawValue,
                 "assessment_reason": reason,
-                "assessment_timeout": timedOut ? "true" : "false",
-                "assessment_fallback": usedFallback ? "true" : "false"
+                "assessment_timeout": timedOut ? "true" : "false"
             ]
 
             if let refinementTool {
                 details["assessment_refinement_tool"] = refinementTool
-            }
-
-            if let previousTool {
-                details["assessment_previous_tool"] = previousTool
-                details["assessment_previous_timeout"] = previousTimedOut ? "true" : "false"
             }
 
             if let exitStatus {
@@ -2907,87 +2892,17 @@ class DMGProcessor: ObservableObject {
     }
 
     private nonisolated func assessAppSecurity(at appPath: String) async -> AppSecurityAssessment {
-        let syspolicyURL = URL(fileURLWithPath: "/usr/bin/syspolicy_check")
-        if FileManager.default.isExecutableFile(atPath: syspolicyURL.path) {
-            do {
-                let result = try await runAssessmentProcess(
-                    executableURL: syspolicyURL,
-                    arguments: ["distribution", appPath, "--json"],
-                    timeout: 8
-                )
-
-                if result.timedOut {
-                    return await assessAppWithSpctl(
-                        at: appPath,
-                        usedFallback: true,
-                        previousTool: "syspolicy_check",
-                        previousTimedOut: true,
-                        previousSummary: result.combinedOutput
-                    )
-                }
-
-                if result.exitStatus == 0 {
-                    return AppSecurityAssessment(
-                        result: .passed,
-                        tool: "syspolicy_check",
-                        refinementTool: nil,
-                        reason: "assessment_passed",
-                        summary: compactAssessmentOutput(result.combinedOutput),
-                        exitStatus: result.exitStatus,
-                        refinementExitStatus: nil,
-                        timedOut: false,
-                        usedFallback: false
-                    )
-                }
-
-                return await refineFailedAssessment(
-                    tool: "syspolicy_check",
-                    result: result,
-                    appPath: appPath,
-                    usedFallback: false,
-                    previousTimedOut: false
-                )
-            } catch {
-                return await assessAppWithSpctl(
-                    at: appPath,
-                    usedFallback: true,
-                    previousTool: "syspolicy_check",
-                    previousTimedOut: false,
-                    previousSummary: String(describing: error)
-                )
-            }
-        }
-
-        return await assessAppWithSpctl(
-            at: appPath,
-            usedFallback: true,
-            previousTool: "syspolicy_check_unavailable",
-            previousTimedOut: false,
-            previousSummary: ""
-        )
-    }
-
-    private nonisolated func assessAppWithSpctl(
-        at appPath: String,
-        usedFallback: Bool,
-        previousTool: String,
-        previousTimedOut: Bool,
-        previousSummary: String
-    ) async -> AppSecurityAssessment {
         let spctlURL = URL(fileURLWithPath: "/usr/sbin/spctl")
         guard FileManager.default.isExecutableFile(atPath: spctlURL.path) else {
             return AppSecurityAssessment(
                 result: .unverified,
-                tool: previousTool,
+                tool: "spctl",
                 refinementTool: nil,
                 reason: "assessment_tool_unavailable",
-                summary: compactAssessmentOutput(previousSummary),
+                summary: "",
                 exitStatus: nil,
                 refinementExitStatus: nil,
-                timedOut: false,
-                usedFallback: usedFallback,
-                previousTool: previousTool,
-                previousTimedOut: previousTimedOut
+                timedOut: false
             )
         }
 
@@ -2995,7 +2910,7 @@ class DMGProcessor: ObservableObject {
             let result = try await runAssessmentProcess(
                 executableURL: spctlURL,
                 arguments: ["-a", "-vvv", "--type", "execute", appPath],
-                timeout: 8
+                timeout: 11
             )
 
             if result.timedOut {
@@ -3004,39 +2919,21 @@ class DMGProcessor: ObservableObject {
                     tool: "spctl",
                     refinementTool: nil,
                     reason: "assessment_timed_out",
-                    summary: compactAssessmentOutput(previousSummary + "\n" + result.combinedOutput),
+                    summary: compactAssessmentOutput(result.combinedOutput),
                     exitStatus: result.exitStatus,
                     refinementExitStatus: nil,
-                    timedOut: true,
-                    usedFallback: usedFallback,
-                    previousTool: previousTool,
-                    previousTimedOut: previousTimedOut
+                    timedOut: true
                 )
             }
 
             if result.exitStatus == 0 {
-                return AppSecurityAssessment(
-                    result: .passed,
-                    tool: "spctl",
-                    refinementTool: nil,
-                    reason: "assessment_passed",
-                    summary: compactAssessmentOutput(result.combinedOutput),
-                    exitStatus: result.exitStatus,
-                    refinementExitStatus: nil,
-                    timedOut: false,
-                    usedFallback: usedFallback,
-                    previousTool: previousTool,
-                    previousTimedOut: previousTimedOut
-                )
+                return acceptedSpctlAssessment(result)
             }
 
             return await refineFailedAssessment(
                 tool: "spctl",
                 result: result,
-                appPath: appPath,
-            usedFallback: usedFallback,
-            previousTool: previousTool,
-            previousTimedOut: previousTimedOut
+                appPath: appPath
             )
         } catch {
             return AppSecurityAssessment(
@@ -3044,24 +2941,82 @@ class DMGProcessor: ObservableObject {
                 tool: "spctl",
                 refinementTool: nil,
                 reason: "assessment_failed_to_run",
-                summary: compactAssessmentOutput(previousSummary + "\n" + String(describing: error)),
+                summary: compactAssessmentOutput(String(describing: error)),
                 exitStatus: nil,
                 refinementExitStatus: nil,
-                timedOut: false,
-                usedFallback: usedFallback,
-                previousTool: previousTool,
-                previousTimedOut: previousTimedOut
+                timedOut: false
             )
         }
+    }
+
+    private nonisolated func acceptedSpctlAssessment(_ result: AssessmentProcessResult) -> AppSecurityAssessment {
+        let source = spctlAssessmentSource(in: result.combinedOutput)
+        let assessmentResult: AppSecurityAssessmentResult
+        let reason: String
+
+        if isVerifiedSpctlSource(source) {
+            assessmentResult = .passed
+            reason = "assessment_passed"
+        } else if isDeveloperIDSpctlSource(source) {
+            assessmentResult = .unverified
+            reason = "accepted_developer_id_without_notarization"
+        } else {
+            assessmentResult = .unverified
+            reason = source == nil ? "accepted_source_unavailable" : "accepted_unknown_source"
+        }
+
+        return AppSecurityAssessment(
+            result: assessmentResult,
+            tool: "spctl",
+            refinementTool: nil,
+            reason: reason,
+            summary: compactAssessmentOutput(result.combinedOutput),
+            exitStatus: result.exitStatus,
+            refinementExitStatus: nil,
+            timedOut: false
+        )
+    }
+
+    private nonisolated func spctlAssessmentSource(in output: String) -> String? {
+        output
+            .components(separatedBy: .newlines)
+            .lazy
+            .compactMap { line -> String? in
+                let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmedLine.lowercased().hasPrefix("source=") else {
+                    return nil
+                }
+
+                return String(trimmedLine.dropFirst("source=".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .first
+    }
+
+    private nonisolated func isVerifiedSpctlSource(_ source: String?) -> Bool {
+        guard let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+
+        return normalizedSource == "notarized developer id"
+            || normalizedSource == "apple"
+            || normalizedSource == "apple system"
+            || normalizedSource == "mac app store"
+    }
+
+    private nonisolated func isDeveloperIDSpctlSource(_ source: String?) -> Bool {
+        guard let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+
+        return normalizedSource == "developer id"
+            || (normalizedSource.hasPrefix("developer id") && !normalizedSource.contains("notarized"))
     }
 
     private nonisolated func refineFailedAssessment(
         tool: String,
         result: AssessmentProcessResult,
-        appPath: String,
-        usedFallback: Bool,
-        previousTool: String? = nil,
-        previousTimedOut: Bool
+        appPath: String
     ) async -> AppSecurityAssessment {
         let codesignURL = URL(fileURLWithPath: "/usr/bin/codesign")
         let primaryOutput = result.combinedOutput
@@ -3076,10 +3031,7 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(primaryOutput),
                 exitStatus: result.exitStatus,
                 refinementExitStatus: nil,
-                timedOut: result.timedOut,
-                usedFallback: usedFallback,
-                previousTool: previousTool,
-                previousTimedOut: previousTimedOut
+                timedOut: result.timedOut
             )
         }
 
@@ -3100,10 +3052,7 @@ class DMGProcessor: ObservableObject {
                     summary: compactAssessmentOutput(combinedOutput),
                     exitStatus: result.exitStatus,
                     refinementExitStatus: codesignResult.exitStatus,
-                    timedOut: result.timedOut || codesignResult.timedOut,
-                    usedFallback: usedFallback,
-                    previousTool: previousTool,
-                    previousTimedOut: previousTimedOut
+                    timedOut: result.timedOut || codesignResult.timedOut
                 )
             }
 
@@ -3126,10 +3075,7 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(combinedOutput),
                 exitStatus: result.exitStatus,
                 refinementExitStatus: codesignResult.exitStatus,
-                timedOut: result.timedOut || codesignResult.timedOut,
-                usedFallback: usedFallback,
-                previousTool: previousTool,
-                previousTimedOut: previousTimedOut
+                timedOut: result.timedOut || codesignResult.timedOut
             )
         } catch {
             let combinedOutput = primaryOutput + "\n" + String(describing: error)
@@ -3142,10 +3088,7 @@ class DMGProcessor: ObservableObject {
                     summary: compactAssessmentOutput(combinedOutput),
                     exitStatus: result.exitStatus,
                     refinementExitStatus: nil,
-                    timedOut: result.timedOut,
-                    usedFallback: usedFallback,
-                    previousTool: previousTool,
-                    previousTimedOut: previousTimedOut
+                    timedOut: result.timedOut
                 )
             }
 
@@ -3157,10 +3100,7 @@ class DMGProcessor: ObservableObject {
                 summary: compactAssessmentOutput(combinedOutput),
                 exitStatus: result.exitStatus,
                 refinementExitStatus: nil,
-                timedOut: result.timedOut,
-                usedFallback: usedFallback,
-                previousTool: previousTool,
-                previousTimedOut: previousTimedOut
+                timedOut: result.timedOut
             )
         }
     }
