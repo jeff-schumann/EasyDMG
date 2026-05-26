@@ -15,29 +15,30 @@
 After setting EasyDMG as your default app for opening DMGs (instructions below - but it's just "click the button"), opening any DMG will automatically:
 
 1. Mount the DMG
-2. Copy the app to /Applications folder
-3. Open Applications and highlight the new app, ready for you to run it
-4. Unmount the DMG
-5. Trash the DMG (optional via Settings)
+2. Perform macOS security check
+3. Copy the app to /Applications folder
+4. Open the app directly, or open Finder and highlight the app
+5. Unmount the DMG
+6. Trash the DMG
 
 ## Features
 
 - **It's EASY!**: Set EasyDMG as your default DMG handler and forget about it. 
-- **It's simple**: After setting as your default, the app only runs when opening a DMG. Doesn't take up space in your dock or menubar, it's gone until you need it
-- **It's fun**: Enjoy the hamster progress bar if enabled 🪄
+- **It's simple**: The app only runs when opening a DMG. It doesn't take up space in your dock or menu bar, it's gone until you need it
 - **It's native**: Built with Swift for MacOS, it's quick and seamless
-- **Flexible settings**: Choose between progress window, notifications, or silent mode
-- **Save disk space**: Optionally moves DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
+- **Flexible settings**: Choose installation preferences that match your workflow
+- **Save disk space**: Move DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
 - **Cautious by default**: If EasyDMG encounters anything unusual (license agreements, multiple apps, pkg installers), it opens the DMG and lets you handle it manually. It only automates the simple, common case.
 - **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, the rest take one click, and you can disable the prompt entirely in Settings. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 - **Automatic updates**: Built-in Sparkle integration for easy updates
+- **It's fun**: The wizard hamster updates you on his silly antics in the progress bar 🪄
 
 ## Screenshots
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/5e454a37-bef2-47ce-9853-5febc06fd07c" width="48%" alt="Setup - Light Mode" />
+  <img src="https://github.com/user-attachments/assets/d191385a-b7e6-467d-ab09-c79a190592bb" width="48%" alt="Setup - Light Mode" />
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://github.com/user-attachments/assets/5a6f142b-f8e2-4719-9fc3-3fe8b4327a3e" width="48%" alt="Settings - Dark Mode" />
+  <img src="https://github.com/user-attachments/assets/6c821692-454f-4753-8bec-bfe2471fb077" width="48%" alt="Settings - Dark Mode" />
 </p>
 
 <p align="center">
