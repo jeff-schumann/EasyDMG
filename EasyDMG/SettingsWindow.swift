@@ -108,11 +108,10 @@ private struct HeroHeader: View {
 
     var body: some View {
         HStack(spacing: colorScheme == .dark ? 14 : 4) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
+            Image("wizardhamster")
                 .resizable()
                 .interpolation(.high)
                 .antialiased(true)
-                .frame(width: 102, height: 102)
                 .frame(width: 84, height: 84)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {

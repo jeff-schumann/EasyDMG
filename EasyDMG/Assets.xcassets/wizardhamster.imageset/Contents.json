@@ -1,15 +1,17 @@
 {
   "images" : [
     {
-      "filename" : "wizardhamster-square.jpg",
+      "filename" : "wizardhamster.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
+      "filename" : "wizardhamster@2x.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
+      "filename" : "wizardhamster@3x.png",
       "idiom" : "universal",
       "scale" : "3x"
     }
