@@ -108,10 +108,13 @@ private struct HeroHeader: View {
 
     var body: some View {
         HStack(spacing: colorScheme == .dark ? 14 : 4) {
-            Image("wizardhamster")
+            Image(nsImage: NSApplication.shared.applicationIconImage)
                 .resizable()
+                .interpolation(.high)
+                .antialiased(true)
+                .frame(width: 102, height: 102)
                 .frame(width: 84, height: 84)
-                .cornerRadius(16)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             VStack(alignment: .leading, spacing: 5) {
                 Text("EasyDMG")
                     .font(.system(size: 28, weight: .bold))
@@ -197,6 +200,8 @@ struct SetupTabView: View {
                         Spacer()
                         Image("easydmg-select")
                             .resizable()
+                            .interpolation(.high)
+                            .antialiased(true)
                             .aspectRatio(contentMode: .fit)
                             .frame(width: 395)
                             .cornerRadius(8)

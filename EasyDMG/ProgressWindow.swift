@@ -107,6 +107,8 @@ struct InstallProgressView: View {
             if let icon = NSApp.applicationIconImage {
                 Image(nsImage: icon)
                     .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
                     .frame(width: 48, height: 48)
             } else {
                 // Fallback if app icon not found
