@@ -3,6 +3,83 @@
 <channel>
 <title>EasyDMG</title>
 <item>
+            <title>2.2.1</title>
+            <pubDate>Wed, 27 May 2026 17:51:43 -0400</pubDate>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>2.2.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[
+<style>
+  section[data-sparkle-version] {
+    margin-bottom: 1em;
+  }
+
+  .sparkle-installed-version,
+  .sparkle-installed-version ~ section[data-sparkle-version] {
+    display: none;
+  }
+</style>
+
+<p>What's new since your last update:</p>
+
+<section data-sparkle-version="13">
+<h2>EasyDMG 2.2.1</h2>
+<p>This hotfix improves Gatekeeper handling for notarized apps and includes a small visual polish pass for the settings artwork.</p>
+<ul>
+  <li>Fixed Gatekeeper checks for notarized apps that rely on DMG-level notarization, reducing false warnings during installation.</li>
+  <li>Updated EasyDMG's security preflight to better match macOS's normal launch-time Gatekeeper behavior.</li>
+  <li>Improved settings and progress artwork rendering, especially on external and non-Retina displays.</li>
+  <li>Updated README, privacy, and security documentation to better describe installation behavior and macOS security checks.</li>
+</ul>
+</section>
+
+<section data-sparkle-version="12">
+<h2>EasyDMG 2.2.0</h2>
+<p>This update makes EasyDMG more careful and transparent when macOS cannot fully verify an app during installation.</p>
+<ul>
+  <li>Added a macOS security preflight before EasyDMG removes quarantine attributes from installed apps.</li>
+  <li>Verified apps continue to install smoothly, while apps from unidentified developers now show a clear trust prompt before continuing.</li>
+  <li>If macOS flags an app as damaged, modified, revoked, or potentially unsafe, EasyDMG will no longer install it automatically and will offer manual handling instead.</li>
+  <li>Added a Settings option to skip the unidentified-developer prompt for users who regularly install apps they already trust.</li>
+  <li>Improved replacement handling for App Store-managed apps and strengthened diagnostic logging around install decisions.</li>
+</ul>
+</section>
+
+<section data-sparkle-version="11">
+<h2>EasyDMG 2.1.1</h2>
+<p>This update keeps the Sparkle update/install window visible throughout the update flow.</p>
+<ul>
+  <li>Fixed an issue where the update progress or install panel could disappear behind other apps after clicking Install.</li>
+</ul>
+</section>
+
+<section data-sparkle-version="10">
+<h2>EasyDMG 2.1.0</h2>
+<p>This update focuses on smoother app replacements, clearer macOS permission handling, and a more reliable install flow.</p>
+<ul>
+  <li>Improved replacing apps in Applications with version comparison, clearer Replace messaging, and an option to automatically install newer versions.</li>
+  <li>Added guided handling for macOS App Management permission so EasyDMG can recover gracefully instead of failing mid-install.</li>
+  <li>EasyDMG now checks whether the app being replaced is running and helps quit it first, preventing stale launches after installation.</li>
+  <li>Install prompts now stay visible even if EasyDMG loses focus or macOS activates another app.</li>
+  <li>Added an option to open the installed app automatically after EasyDMG finishes.</li>
+  <li>Improved DMG cleanup/unmount reliability, progress window readability, and support links.</li>
+</ul>
+</section>
+
+<section data-sparkle-version="9">
+<h2>EasyDMG 2.0.0</h2>
+<p>This is the biggest EasyDMG update yet: a full settings redesign, deeper stability work, and smarter decisions when DMGs get weird.</p>
+<ul>
+  <li>Rebuilt the settings window with a more polished design, clearer setup flow, and stronger light/dark mode support.</li>
+  <li>Greatly improved fallback handling for installer-style DMGs, helper apps, multiple-app volumes, and unusual app bundles.</li>
+  <li>Hardened notifications, launch handling, and diagnostic logging so success, fallback, and error states are easier to trust and troubleshoot.</li>
+  <li>Expanded compatibility to macOS 13.0 and later.</li>
+</ul>
+</section>
+]]></description>
+            <enclosure url="https://github.com/jeff-schumann/EasyDMG/releases/download/v2.2.1/EasyDMG_v2.2.1.dmg" length="4396617" type="application/octet-stream" sparkle:edSignature="ugTwS+vWchHCRsxscR4FqtKGoRrH5Exkfavn5JzQBITnV0q9WJceU9LjoA9SBAbT7BYppQWz104Kysup/fpYAg=="/>
+        </item>
+<item>
             <title>2.2.0</title>
             <pubDate>Tue, 26 May 2026 18:01:56 -0400</pubDate>
             <sparkle:version>12</sparkle:version>
