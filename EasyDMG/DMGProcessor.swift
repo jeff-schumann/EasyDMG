@@ -561,6 +561,15 @@ class DMGProcessor: ObservableObject {
         case securityAssessmentUnverified = "security_assessment_unverified"
         case securityAssessmentBlocked = "security_assessment_blocked"
 
+        var notificationTitle: String {
+            switch self {
+            case .licenseRequired:
+                return "License agreement required"
+            default:
+                return "EasyDMG needs manual install"
+            }
+        }
+
         var notificationMessage: String? {
             switch self {
             case .genericMountFailure:
@@ -578,7 +587,7 @@ class DMGProcessor: ObservableObject {
             case .multipleAppsFound:
                 return "EasyDMG found multiple apps, so it opened the disk image for manual installation."
             case .licenseRequired:
-                return "This disk image appears to require a license agreement, so EasyDMG opened it for manual installation."
+                return "Review the license agreement in the macOS installer window to continue."
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
                 return nil
@@ -1084,7 +1093,7 @@ class DMGProcessor: ObservableObject {
         }
 
         await sendNotification(
-            title: "EasyDMG needs manual install",
+            title: reason.notificationTitle,
             message: "\(dmgName): \(message)"
         )
     }
@@ -1204,15 +1213,14 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        // TODO: Fix license detection - currently giving false positives without sandbox
-        // if await hasLicenseAgreement(dmgPath: url.path) {
-        //     await openForManualInstallation(
-        //         dmgPath: url.path,
-        //         dmgName: currentDMGName,
-        //         reason: .licenseRequired
-        //     )
-        //     return
-        // }
+        if await hasLicenseAgreement(dmgPath: url.path, dmgName: currentDMGName) {
+            await openForManualInstallation(
+                dmgPath: url.path,
+                dmgName: currentDMGName,
+                reason: .licenseRequired
+            )
+            return
+        }
 
         let mountResult = await mountDMG(at: url.path, dmgName: currentDMGName, progress: 0.0)
 
@@ -1346,25 +1354,110 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private func hasLicenseAgreement(dmgPath: String) async -> Bool {
+    private func hasLicenseAgreement(dmgPath: String, dmgName: String) async -> Bool {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-        task.arguments = ["imageinfo", dmgPath]
+        task.arguments = ["imageinfo", dmgPath, "-plist"]
 
         let pipe = Pipe()
+        let errorPipe = Pipe()
         task.standardOutput = pipe
+        task.standardError = errorPipe
 
         do {
+            diagnostic("Checking disk image metadata for license agreement: \(dmgPath)")
             try task.run()
             task.waitUntilExit()
 
+            guard task.terminationStatus == 0 else {
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                let rawErrorOutput = String(data: errorData, encoding: .utf8) ?? ""
+                diagnostic(
+                    "License metadata check failed with status \(task.terminationStatus): "
+                    + DiagnosticLogger.compact(rawErrorOutput)
+                )
+                support(
+                    event: "license_preflight",
+                    details: [
+                        "dmg": dmgName,
+                        "result": "imageinfo_failed",
+                        "exit_status": String(task.terminationStatus)
+                    ]
+                )
+                return false
+            }
+
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            return output.contains("Software License Agreement") && output.contains("true")
+            let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            let hasLicense = Self.plistContainsLicenseAgreement(plist)
+            diagnostic("License metadata check result: \(hasLicense ? "license_required" : "none")")
+            support(
+                event: "license_preflight",
+                details: [
+                    "dmg": dmgName,
+                    "result": hasLicense ? "license_required" : "none"
+                ]
+            )
+            return hasLicense
         } catch {
             diagnostic("Error checking for license: \(error)")
+            support(
+                event: "license_preflight",
+                details: [
+                    "dmg": dmgName,
+                    "result": "error"
+                ]
+            )
             return false
         }
+    }
+
+    private nonisolated static func plistContainsLicenseAgreement(_ value: Any) -> Bool {
+        if let dictionary = value as? [String: Any] {
+            for (key, childValue) in dictionary {
+                let normalizedKey = key
+                    .lowercased()
+                    .filter { $0.isLetter || $0.isNumber }
+
+                if (normalizedKey == "softwarelicenseagreement" ||
+                    normalizedKey == "licenseagreement" ||
+                    normalizedKey == "softwarelicenseagreements") &&
+                    plistValueIsTrue(childValue) {
+                    return true
+                }
+
+                if plistContainsLicenseAgreement(childValue) {
+                    return true
+                }
+            }
+        } else if let array = value as? [Any] {
+            for childValue in array where plistContainsLicenseAgreement(childValue) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private nonisolated static func plistValueIsTrue(_ value: Any) -> Bool {
+        if let boolValue = value as? Bool {
+            return boolValue
+        }
+
+        if let numberValue = value as? NSNumber {
+            return numberValue.boolValue
+        }
+
+        if let stringValue = value as? String {
+            switch stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "yes", "1":
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
     }
 
     private nonisolated static func parseMountPoint(fromAttachPlist data: Data) -> String? {
