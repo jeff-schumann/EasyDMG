@@ -2,7 +2,7 @@
 
 This document tracks edge cases that could affect automatic DMG installation. It is intentionally conservative: EasyDMG should automate only the boring, common case and fall back to manual installation when a DMG looks unusual.
 
-**Last updated**: 2026-05-26
+**Last updated**: 2026-05-28
 
 ## Current Rule of Thumb
 
@@ -11,16 +11,6 @@ EasyDMG should automatically install a DMG only when it finds one valid, top-lev
 If the DMG contains installers, packages, license gates, multiple plausible apps, or anything else ambiguous, EasyDMG should open the DMG and let the user handle it manually.
 
 ## Worth Handling Soon
-
-### 22. DMG-Level License Agreements - Rating: 5/10 - ACTIONABLE WITH CARE
-
-Some DMGs display a license agreement before mounting in Finder. EasyDMG should not silently bypass a license gate.
-
-**Current behavior**: License detection exists in code but is disabled because the old check produced false positives without sandboxing.
-
-**Suggested fix**: Revisit this with stricter parsing instead of a broad text search. If detection is reliable, fall back to DiskImageMounter so macOS shows the normal license flow.
-
-**Implementation difficulty**: 4/10.
 
 ### 17. Non-Standard `/Applications` Locations - Rating: 3/10 - PARTIALLY RESOLVED
 
@@ -99,6 +89,14 @@ Copying without enough free space could leave a partial app behind.
 Not every directory ending in `.app` is necessarily a normal launchable app bundle.
 
 **Current behavior**: Before copying a single app candidate, EasyDMG verifies `Contents/Info.plist`, requires `CFBundlePackageType == APPL`, requires a non-empty `CFBundleExecutable`, and checks that the referenced executable exists and is executable. If validation fails, it falls back to manual installation.
+
+### 22. DMG-Level License Agreements - Rating: 5/10 - RESOLVED
+
+Some DMGs display a software license agreement that the user must accept before the volume mounts. EasyDMG should not silently bypass that gate.
+
+**Current behavior**: Before mounting, EasyDMG runs a preflight that parses `hdiutil imageinfo -plist` and reads the image's `Software License Agreement` property directly, instead of text-matching the human-readable output (the old approach, which false-positived on nearly every image). The check runs through the shared timeout-bounded process runner, so a stuck `hdiutil` cannot stall processing. When the property is true, EasyDMG opens the DMG via DiskImageMounter so macOS presents its normal license flow and the user accepts before installing.
+
+**Remaining concern**: Detection relies on the image's SLA flag. A DMG that gates licensing by other means (e.g. a custom first-run agreement inside the app) won't be caught here, but those generally reach the same manual-fallback path through other checks.
 
 ### 23. Quitting Running App Instances - Rating: 2/10 - RESOLVED
 

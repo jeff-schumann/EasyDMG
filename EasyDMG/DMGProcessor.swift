@@ -1355,39 +1355,44 @@ class DMGProcessor: ObservableObject {
     }
 
     private func hasLicenseAgreement(dmgPath: String, dmgName: String) async -> Bool {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-        task.arguments = ["imageinfo", dmgPath, "-plist"]
+        diagnostic("Checking disk image metadata for license agreement: \(dmgPath)")
 
-        let pipe = Pipe()
-        let errorPipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = errorPipe
+        let result: AssessmentProcessResult
+        do {
+            result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                arguments: ["imageinfo", dmgPath, "-plist"],
+                timeout: 10
+            )
+        } catch {
+            diagnostic("Error checking for license: \(error)")
+            support(
+                event: "license_preflight",
+                details: ["dmg": dmgName, "result": "error"]
+            )
+            return false
+        }
+
+        guard !result.timedOut, result.exitStatus == 0 else {
+            let outcome = result.timedOut ? "imageinfo_timeout" : "imageinfo_failed"
+            let exitStatus = result.exitStatus.map { String($0) } ?? "none"
+            diagnostic(
+                "License metadata check \(outcome) (status \(exitStatus)): "
+                + DiagnosticLogger.compact(result.standardError)
+            )
+            support(
+                event: "license_preflight",
+                details: [
+                    "dmg": dmgName,
+                    "result": outcome,
+                    "exit_status": exitStatus
+                ]
+            )
+            return false
+        }
 
         do {
-            diagnostic("Checking disk image metadata for license agreement: \(dmgPath)")
-            try task.run()
-            task.waitUntilExit()
-
-            guard task.terminationStatus == 0 else {
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                let rawErrorOutput = String(data: errorData, encoding: .utf8) ?? ""
-                diagnostic(
-                    "License metadata check failed with status \(task.terminationStatus): "
-                    + DiagnosticLogger.compact(rawErrorOutput)
-                )
-                support(
-                    event: "license_preflight",
-                    details: [
-                        "dmg": dmgName,
-                        "result": "imageinfo_failed",
-                        "exit_status": String(task.terminationStatus)
-                    ]
-                )
-                return false
-            }
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let data = Data(result.standardOutput.utf8)
             let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             let hasLicense = Self.plistContainsLicenseAgreement(plist)
             diagnostic("License metadata check result: \(hasLicense ? "license_required" : "none")")
@@ -1400,13 +1405,10 @@ class DMGProcessor: ObservableObject {
             )
             return hasLicense
         } catch {
-            diagnostic("Error checking for license: \(error)")
+            diagnostic("Error parsing license metadata: \(error)")
             support(
                 event: "license_preflight",
-                details: [
-                    "dmg": dmgName,
-                    "result": "error"
-                ]
+                details: ["dmg": dmgName, "result": "parse_error"]
             )
             return false
         }
@@ -1419,9 +1421,7 @@ class DMGProcessor: ObservableObject {
                     .lowercased()
                     .filter { $0.isLetter || $0.isNumber }
 
-                if (normalizedKey == "softwarelicenseagreement" ||
-                    normalizedKey == "licenseagreement" ||
-                    normalizedKey == "softwarelicenseagreements") &&
+                if normalizedKey == "softwarelicenseagreement" &&
                     plistValueIsTrue(childValue) {
                     return true
                 }
@@ -1446,15 +1446,6 @@ class DMGProcessor: ObservableObject {
 
         if let numberValue = value as? NSNumber {
             return numberValue.boolValue
-        }
-
-        if let stringValue = value as? String {
-            switch stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "true", "yes", "1":
-                return true
-            default:
-                return false
-            }
         }
 
         return false
@@ -3294,6 +3285,10 @@ class DMGProcessor: ObservableObject {
         let task = Process()
         task.executableURL = executableURL
         task.arguments = arguments
+
+        // These tools (hdiutil, spctl, codesign) never read stdin; detaching it
+        // ensures a prompt can never wedge the process while we wait on it.
+        task.standardInput = FileHandle.nullDevice
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
