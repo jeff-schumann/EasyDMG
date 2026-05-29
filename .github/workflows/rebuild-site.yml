@@ -1,0 +1,18 @@
+name: Rebuild website
+
+# When the policy docs change, ping the EasyDMG-Web Cloudflare Pages deploy
+# hook so the site rebuilds and re-bakes the latest PRIVACY.md / SECURITY.md.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'PRIVACY.md'
+      - '.github/SECURITY.md'
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Cloudflare Pages deploy hook
+        run: curl -fsS -X POST "${{ secrets.CF_DEPLOY_HOOK }}"
