@@ -12,11 +12,11 @@
 
 ## What EasyDMG Does
 
-After setting EasyDMG as your default app for opening DMGs (instructions below - but it's just "click the button"), opening any DMG will automatically:
+After setting EasyDMG as your default app for opening DMGs, opening any DMG will automatically:
 
 1. Mount the DMG
 2. Perform macOS security check
-3. Copy the app to /Applications folder
+3. Install the app to /Applications
 4. Open the app directly, or open Finder and highlight the app
 5. Unmount the DMG
 6. Trash the DMG
