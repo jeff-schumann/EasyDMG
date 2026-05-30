@@ -861,7 +861,6 @@ class DMGProcessor: ObservableObject {
         case missingInfoPlist = "missing_info_plist"
         case unreadableInfoPlist = "unreadable_info_plist"
         case notApplicationBundle = "not_application_bundle"
-        case missingExecutableName = "missing_executable_name"
         case missingExecutableFile = "missing_executable_file"
         case executableNotExecutable = "executable_not_executable"
     }
@@ -1734,13 +1733,27 @@ class DMGProcessor: ObservableObject {
             return .unreadableInfoPlist
         }
 
-        guard info["CFBundlePackageType"] as? String == "APPL" else {
-            return .notApplicationBundle
+        // CFBundlePackageType is optional; macOS treats a `.app` as an application even
+        // when it is absent. Only reject a deliberate non-application type (e.g. FMWK or
+        // BNDL), never a missing/blank value. Trim first so a stray " APPL " still counts.
+        if let rawPackageType = info["CFBundlePackageType"] as? String {
+            let packageType = rawPackageType.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !packageType.isEmpty, packageType != "APPL" {
+                return .notApplicationBundle
+            }
         }
 
-        guard let executableName = info["CFBundleExecutable"] as? String,
-              !executableName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .missingExecutableName
+        // CFBundleExecutable is also optional. When it is missing or blank, macOS falls
+        // back to the bundle's base name (ScreenKite.app -> Contents/MacOS/ScreenKite).
+        let declaredExecutable = (info["CFBundleExecutable"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let bundleBaseName = appURL.deletingPathExtension().lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let executableName: String
+        if let declaredExecutable, !declaredExecutable.isEmpty {
+            executableName = declaredExecutable
+        } else {
+            executableName = bundleBaseName
         }
 
         let executableURL = appURL
