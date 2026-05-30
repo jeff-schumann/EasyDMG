@@ -1,19 +1,20 @@
 #!/bin/bash
 
-# Create DMG for EasyDMG distribution
+# Create DMG for EasyDMG distribution.
+# Defaults to a stable public filename so GitHub's latest download link can stay fixed.
 # Usage: ./create_dmg.sh
 
 set -e
 
 # Configuration
 APP_NAME="${APP_NAME:-EasyDMG}"
-VERSION="${VERSION:-2.2.1}"
+VERSION="${VERSION:-}"
 BUILD_DIR="${BUILD_DIR:-$HOME/Library/Developer/Xcode/DerivedData/EasyDMG-dibggcaewvrasrcrtvhemiwxucou/Build/Products/Release}"
-DMG_NAME="${DMG_NAME:-${APP_NAME}_v${VERSION}}"
+DMG_NAME="${DMG_NAME:-${APP_NAME}}"
 TEMP_DIR="${TEMP_DIR:-/tmp/${APP_NAME}_dmg}"
 OUTPUT_DMG="${OUTPUT_DMG:-./${DMG_NAME}.dmg}"
 
-echo "📦 Creating DMG for ${APP_NAME} ${VERSION}..."
+echo "📦 Creating DMG for ${APP_NAME}${VERSION:+ ${VERSION}}..."
 
 # Clean up any existing temp directory and output DMG
 rm -rf "$TEMP_DIR"
