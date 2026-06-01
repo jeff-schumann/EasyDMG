@@ -561,33 +561,45 @@ class DMGProcessor: ObservableObject {
         case securityAssessmentUnverified = "security_assessment_unverified"
         case securityAssessmentBlocked = "security_assessment_blocked"
 
-        var notificationTitle: String {
+        func notificationTitle(appName: String) -> String {
             switch self {
+            case .invalidAppBundle, .genericMountFailure:
+                return "Finish installing \(appName)"
+            case .packageInstaller:
+                return "\(appName) uses a .pkg installer"
+            case .installerOrAuxiliaryApp:
+                return "\(appName) uses an installer"
+            case .passwordProtected:
+                return "\(appName) is password-protected"
+            case .noAppFound:
+                return "No app found"
+            case .multipleAppsFound:
+                return "\(appName) has more than one app"
             case .licenseRequired:
-                return "License agreement required"
-            default:
+                return "\(appName) has a license to accept"
+            case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 return "EasyDMG needs manual install"
             }
         }
 
-        var notificationMessage: String? {
+        func notificationMessage(appName: String) -> String? {
             switch self {
             case .genericMountFailure:
-                return "EasyDMG could not mount this disk image automatically, so it opened the normal macOS installer."
+                return "Failure during mount — switching to manual mode."
             case .invalidAppBundle:
-                return "The app bundle did not look installable, so EasyDMG opened the disk image for manual installation."
+                return "Invalid app bundle — switching to manual mode."
             case .packageInstaller:
-                return "This disk image contains a package installer, so EasyDMG opened it for manual installation."
+                return "Open the installer in the window and follow the steps."
             case .installerOrAuxiliaryApp:
-                return "The app looked like an installer or helper, so EasyDMG opened the disk image for manual installation."
+                return "Open it in the window and follow the steps to finish."
             case .passwordProtected:
-                return "This disk image is password-protected, so EasyDMG opened it for manual installation."
+                return "Enter its password, then drag the app into Applications."
             case .noAppFound:
-                return "EasyDMG did not find an installable app, so it opened the disk image for manual installation."
+                return "EasyDMG opened \(appName) so you can install it yourself."
             case .multipleAppsFound:
-                return "EasyDMG found multiple apps, so it opened the disk image for manual installation."
+                return "Choose which app to drag into your Applications folder."
             case .licenseRequired:
-                return "Review the license agreement in the macOS installer window to continue."
+                return "Review and accept the agreement in the window to continue."
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
                 return nil
@@ -1087,14 +1099,22 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        guard let message = reason.notificationMessage else {
+        let appName = manualFallbackAppName(from: dmgName)
+        guard let message = reason.notificationMessage(appName: appName) else {
             return
         }
 
         await sendNotification(
-            title: reason.notificationTitle,
-            message: "\(dmgName): \(message)"
+            title: reason.notificationTitle(appName: appName),
+            message: message
         )
+    }
+
+    private func manualFallbackAppName(from dmgName: String) -> String {
+        let strippedName = (dmgName as NSString)
+            .deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return strippedName.isEmpty ? dmgName : strippedName
     }
 
     private func requestNotificationPermissionsIfNeeded() async {
