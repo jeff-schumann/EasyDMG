@@ -173,13 +173,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // This is called before application(_:open:)
         // We use it to detect if files will be opened
         DiagnosticLogger.shared.startSession()
-        diagnostic("applicationWillFinishLaunching")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        diagnostic(
-            "applicationDidFinishLaunching diagnosticLogging=\(DiagnosticLogger.shared.isDiagnosticEnabled)"
-        )
 
         // Set notification delegate to show notifications even when app is active
         UNUserNotificationCenter.current().delegate = self
@@ -246,7 +242,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        diagnostic("✅ application(_:open:) called with \(urls.count) file(s): \(urls)")
         launchedWithFiles = true
 
         // Hide settings window if it's visible (but not progress window)
@@ -256,17 +251,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         NSApp.setActivationPolicy(.accessory)
 
         let dmgURLs = urls.filter { url in
-            diagnostic("✅ Checking file: \(url.path)")
             if url.pathExtension.lowercased() == "dmg" {
-                diagnostic("✅ Queueing DMG file: \(url.lastPathComponent)")
                 return true
             } else {
-                diagnostic("⚠️ Not a DMG file, ignoring: \(url.path)")
                 return false
             }
         }
 
-        diagnostic("Filtered DMG count: \(dmgURLs.count)")
         support(
             event: "open_request",
             details: [
@@ -317,7 +308,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             return .terminateCancel
         }
 
-        diagnostic("✅ Allowing termination")
         support(event: "termination_decision", details: ["action": "allow"])
         return .terminateNow
     }

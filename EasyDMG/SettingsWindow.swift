@@ -317,21 +317,57 @@ struct AboutTabView: View {
                     }
                     .buttonStyle(AmberOutlineButtonStyle(theme: theme))
 
-                    Button("Report Issue ↗") {
-                        NSWorkspace.shared.open(URL(string: "https://github.com/jeff-schumann/EasyDMG/issues")!)
+                    Button("Support Development :)") {
+                        NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/jeff.schumann")!)
                     }
                     .buttonStyle(AmberOutlineButtonStyle(theme: theme))
                 }
                 .padding(.top, 4)
 
-                Button("Support Development :)") {
-                    NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/jeff.schumann")!)
+                // Logs section
+                Rectangle()
+                    .fill(theme.border)
+                    .frame(height: 1)
+                    .padding(.top, 6)
+
+                Text("Logs")
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(theme.text)
+
+                Text("EasyDMG keeps a local log of what it does each time it runs. Open it to see what happened, or include it when reporting an issue on GitHub.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.muted)
+                    .lineSpacing(3)
+
+                HStack(spacing: 8) {
+                    Button("Show Logs") {
+                        showLogs()
+                    }
+                    .buttonStyle(AmberOutlineButtonStyle(theme: theme))
+
+                    Button("Report Issue ↗") {
+                        NSWorkspace.shared.open(URL(string: "https://github.com/jeff-schumann/EasyDMG/issues")!)
+                    }
+                    .buttonStyle(AmberOutlineButtonStyle(theme: theme))
                 }
-                .buttonStyle(AmberOutlineButtonStyle(theme: theme))
+                .padding(.top, 2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
+        }
+    }
+
+    private func showLogs() {
+        guard let path = DiagnosticLogger.shared.logFilePath else { return }
+        let url = URL(fileURLWithPath: path)
+
+        // Open the log in the user's default text viewer. If it doesn't exist yet
+        // (no session has written to it), reveal the logs folder as a fallback.
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.open(url)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url.deletingLastPathComponent()])
         }
     }
 }

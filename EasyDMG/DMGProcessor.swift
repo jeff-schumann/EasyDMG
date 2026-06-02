@@ -1020,7 +1020,6 @@ class DMGProcessor: ObservableObject {
 
                 let magicMessage = randomMagicMessage()
                 ProgressWindowController.shared.update(message: magicMessage, progress: progress)
-                DiagnosticLogger.shared.diagnostic("📝 \(magicMessage) (\(Int(progress * 100))%)")
             }
         }
     }
@@ -1254,13 +1253,11 @@ class DMGProcessor: ObservableObject {
     private func processNextDMG(at url: URL) async {
         let currentDMGName = url.lastPathComponent
         resetMagicMessageSession()
-        diagnostic("processNextDMG started path=\(url.path)")
         support(event: "dmg_begin", details: ["dmg": currentDMGName])
 
         await requestNotificationPermissionsIfNeeded()
 
         currentFeedbackMode = await effectiveFeedbackMode()
-        diagnostic("Effective feedback mode: \(currentFeedbackMode.rawValue)")
         support(
             event: "feedback_mode",
             details: ["dmg": currentDMGName, "mode": currentFeedbackMode.rawValue]
@@ -1428,7 +1425,6 @@ class DMGProcessor: ObservableObject {
                 return
             }
 
-            diagnostic("Installing: \(appName(from: appPath)) from \(appPath)")
             await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path, dmgName: currentDMGName)
 
         default:
@@ -1477,7 +1473,6 @@ class DMGProcessor: ObservableObject {
         }
 
         let encrypted = result.standardOutput.lowercased().contains("encrypted: yes")
-        diagnostic("Encryption check result: \(encrypted ? "encrypted" : "not_encrypted")")
         support(
             event: "encryption_preflight",
             details: ["dmg": dmgName, "result": encrypted ? "encrypted" : "not_encrypted"]
@@ -1486,7 +1481,6 @@ class DMGProcessor: ObservableObject {
     }
 
     private func hasLicenseAgreement(dmgPath: String, dmgName: String) async -> Bool {
-        diagnostic("Checking disk image metadata for license agreement: \(dmgPath)")
 
         let result: AssessmentProcessResult
         do {
@@ -1526,7 +1520,6 @@ class DMGProcessor: ObservableObject {
             let data = Data(result.standardOutput.utf8)
             let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             let hasLicense = Self.plistContainsLicenseAgreement(plist)
-            diagnostic("License metadata check result: \(hasLicense ? "license_required" : "none")")
             support(
                 event: "license_preflight",
                 details: [
@@ -1593,7 +1586,6 @@ class DMGProcessor: ObservableObject {
 
             for entity in systemEntities {
                 if let mountPoint = entity["mount-point"] as? String, !mountPoint.isEmpty {
-                    DiagnosticLogger.shared.diagnostic("Parsed mount point from plist: \(mountPoint)")
                     return mountPoint
                 }
             }
@@ -1607,7 +1599,6 @@ class DMGProcessor: ObservableObject {
     }
 
     private func mountDMG(at path: String, dmgName: String, progress: Double) async -> MountResult {
-        diagnostic("Mounting DMG: \(path)")
         support(event: "mount_start", details: ["dmg": dmgName])
 
         let result = await withMagicFallback(
@@ -1651,11 +1642,7 @@ class DMGProcessor: ObservableObject {
                 return MountResult.failed(exitStatus: processResult.exitStatus)
             }
 
-            DiagnosticLogger.shared.diagnostic("hdiutil attach succeeded")
             if !processResult.standardOutput.isEmpty {
-                DiagnosticLogger.shared.diagnostic(
-                    "hdiutil stdout: \(DiagnosticLogger.compact(processResult.standardOutput))"
-                )
             }
 
             let data = Data(processResult.standardOutput.utf8)
@@ -1822,7 +1809,6 @@ class DMGProcessor: ObservableObject {
         dmgName: String,
         password: String
     ) async -> AuthenticatedLicenseCheckResult {
-        diagnostic("Checking encrypted disk image metadata for license agreement: \(dmgPath)")
 
         var passphrase = Data(password.utf8)
         passphrase.append(0)
@@ -1872,7 +1858,6 @@ class DMGProcessor: ObservableObject {
             let data = Data(result.standardOutput.utf8)
             let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
             let hasLicense = Self.plistContainsLicenseAgreement(plist)
-            diagnostic("Encrypted license metadata check result: \(hasLicense ? "license_required" : "none")")
             support(
                 event: "license_preflight",
                 details: [
@@ -1896,7 +1881,6 @@ class DMGProcessor: ObservableObject {
     /// (`hdiutil -stdinpass`). The passphrase never touches argv — where it would
     /// be visible in `ps` — and is never written to the diagnostic log.
     private func mountEncryptedDMG(at path: String, dmgName: String, password: String) async -> AuthenticatedMountResult {
-        diagnostic("Attempting authenticated mount for \(dmgName)...")
         support(event: "authenticated_mount_start", details: ["dmg": dmgName])
 
         // hdiutil -stdinpass expects a null-terminated passphrase.
@@ -1942,7 +1926,6 @@ class DMGProcessor: ObservableObject {
             return .failed
         }
 
-        diagnostic("Authenticated mount succeeded")
         support(
             event: "authenticated_mount_result",
             details: ["dmg": dmgName, "result": "success", "volume": volumeName(from: mountPoint)]
@@ -2113,7 +2096,6 @@ class DMGProcessor: ObservableObject {
             diagnostic("Error scanning mount point: \(error)")
         }
 
-        diagnostic("Found \(appFiles.count) .app file(s): \(appFiles)")
         return appFiles
     }
 
@@ -2134,7 +2116,6 @@ class DMGProcessor: ObservableObject {
             diagnostic("Error scanning mount point for packages: \(error)")
         }
 
-        diagnostic("Found \(packageFiles.count) package installer file(s): \(packageFiles)")
         return packageFiles
     }
 
@@ -2312,7 +2293,6 @@ class DMGProcessor: ObservableObject {
             }
 
             shouldReplaceExistingApp = true
-            diagnostic("User chose to replace existing app")
             support(
                 event: "install_decision",
                 details: ["action": "replace", "app": resolvedAppName, "dmg": dmgName]
@@ -2402,7 +2382,6 @@ class DMGProcessor: ObservableObject {
 
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
-        diagnostic("Calculated app size: \(appSize) bytes for \(appPath)")
         if !hasEnoughDiskSpace(requiredBytes: appSize) {
             let sizeInGB = Double(appSize) / (1024 * 1024 * 1024)
             diagnostic("Insufficient disk space for app size \(appSize)")
@@ -2442,9 +2421,6 @@ class DMGProcessor: ObservableObject {
                 message: "Installing to Applications...",
                 progress: 0.2
             ) {
-                DiagnosticLogger.shared.diagnostic(
-                    "Copying app from \(appPath) to staging path \(stagedURL.path)"
-                )
                 try FileManager.default.copyItem(atPath: appPath, toPath: stagedURL.path)
             }
 
@@ -2512,7 +2488,6 @@ class DMGProcessor: ObservableObject {
                 try FileManager.default.moveItem(at: stagedURL, to: destinationURL)
             }
             let destinationExists = FileManager.default.fileExists(atPath: destinationPath)
-            diagnostic("Installed app at destination: \(destinationPath); existsAfterMove=\(destinationExists)")
             support(
                 event: "install_result",
                 details: [
@@ -2595,7 +2570,6 @@ class DMGProcessor: ObservableObject {
         }
 
         ProgressWindowController.shared.hide()
-        diagnostic("✅ Processing complete for \(resolvedAppName)")
         recordCompletion(
             dmgName: dmgName,
             outcome: "installed",
@@ -2682,7 +2656,6 @@ class DMGProcessor: ObservableObject {
 
                     if shouldReplace, suppressCheckbox?.state == .on {
                         UserPreferences.shared.autoInstallNewerVersions = true
-                        self.diagnostic("User enabled auto-install for newer versions via Replace dialog")
                         self.support(
                             event: "preference_change",
                             details: [
@@ -2939,7 +2912,6 @@ class DMGProcessor: ObservableObject {
             return true
         }
 
-        diagnostic("Detected \(instances.count) running instance(s) of \(appName) (\(bundleID))")
 
         let userAgreedToQuit = await showQuitRunningAppDialog(appName: appName)
         support(
@@ -3088,7 +3060,6 @@ class DMGProcessor: ObservableObject {
             return false
         }
 
-        diagnostic("Treating termination request as App Management restart request")
         didHandleAppManagementRestartRequest = true
         appManagementPermissionWindowController.handleSystemSettingsRestartRequest()
         return true
@@ -3137,9 +3108,6 @@ class DMGProcessor: ObservableObject {
                         NSWorkspace.shared.open(url)
                     },
                     permissionReady: { reason in
-                        DiagnosticLogger.shared.diagnostic(
-                            "App Management permission ready via \(reason)"
-                        )
                         DiagnosticLogger.shared.support(
                             event: "app_management_permission_ready",
                             details: ["app": appName, "dmg": dmgName, "reason": reason]
@@ -3261,7 +3229,6 @@ class DMGProcessor: ObservableObject {
     }
 
     private func unmountDMG(at mountPoint: String, dmgName: String, progress: Double? = nil) async -> UnmountResult {
-        diagnostic("Unmounting \(mountPoint)...")
         support(
             event: "unmount_start",
             details: [
@@ -3360,7 +3327,6 @@ class DMGProcessor: ObservableObject {
             )
 
             if cleanResult.exitStatus == 0 {
-                DiagnosticLogger.shared.diagnostic("✓ Clean detach succeeded")
                 return .clean
             }
 
@@ -3384,7 +3350,6 @@ class DMGProcessor: ObservableObject {
                 )
 
                 if retryResult.exitStatus == 0 {
-                    DiagnosticLogger.shared.diagnostic("✓ Retry detach succeeded")
                     return .retrySuccess
                 }
 
@@ -3400,7 +3365,6 @@ class DMGProcessor: ObservableObject {
                 timeout: 8.0
             )
             if forceResult.exitStatus == 0 {
-                DiagnosticLogger.shared.diagnostic("✓ Force detach completed with status 0")
                 return .forceSuccess
             }
 
@@ -3901,7 +3865,6 @@ class DMGProcessor: ObservableObject {
     // This prevents apps with auto-update mechanisms from incorrectly detecting
     // "needs update" states that can cause unwanted behavior.
     private func removeQuarantineAttributes(from path: String) async {
-        diagnostic("Removing quarantine attributes from \(path)...")
 
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
@@ -3915,7 +3878,6 @@ class DMGProcessor: ObservableObject {
             task.waitUntilExit()
 
             if task.terminationStatus == 0 {
-                diagnostic("✓ Quarantine attributes removed")
             } else {
                 let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
@@ -3946,7 +3908,6 @@ class DMGProcessor: ObservableObject {
         NSWorkspace.shared.open(URL(fileURLWithPath: mountPoint))
         ProgressWindowController.shared.hide()
 
-        diagnostic("✅ Opened mounted volume for manual installation")
         recordCompletion(
             dmgName: dmgName,
             outcome: "manual_fallback",
@@ -3991,7 +3952,6 @@ class DMGProcessor: ObservableObject {
         }
         ProgressWindowController.shared.hide()
 
-        diagnostic("✅ Opened DMG in DiskImageMounter for manual installation: \(reason.rawValue)")
         recordCompletion(
             dmgName: dmgName,
             outcome: "manual_fallback",
@@ -4006,7 +3966,6 @@ class DMGProcessor: ObservableObject {
     }
 
     private func revealInFinder(path: String) {
-        diagnostic("Revealing app in Finder: \(path)")
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "/Applications")
     }
 
@@ -4028,7 +3987,6 @@ class DMGProcessor: ObservableObject {
     }
 
     private func openInstalledApp(at path: String) async -> Bool {
-        diagnostic("Opening installed app: \(path)")
 
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -4068,6 +4026,5 @@ class DMGProcessor: ObservableObject {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         ProgressWindowController.shared.hide()
 
-        diagnostic("✅ Error handled, continuing queue if needed")
     }
 }

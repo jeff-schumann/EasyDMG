@@ -2,7 +2,9 @@
 //  DiagnosticLogger.swift
 //  EasyDMG
 //
-//  File-backed support and diagnostic logging for launch and DMG handling.
+//  File-backed activity log for launch and DMG handling. A single, always-on,
+//  human-readable log lets users see what EasyDMG did and attach it to a GitHub
+//  issue if something goes wrong.
 //
 
 import Foundation
@@ -18,37 +20,15 @@ final class DiagnosticLogger: @unchecked Sendable {
 
     nonisolated static let shared = DiagnosticLogger()
 
-    private static let environmentKey = "EASYDMG_DIAGNOSTIC_LOGGING"
-    private static let defaultsKey = "diagnosticLoggingEnabled"
-
     private let lock = NSLock()
     private let sessionID = UUID().uuidString.lowercased()
-    private let supportTarget: LogTarget?
-    private let diagnosticTarget: LogTarget?
-    private let diagnosticEnabled: Bool
+    private let target: LogTarget?
 
-    nonisolated var isEnabled: Bool {
-        diagnosticEnabled
-    }
-
-    nonisolated var isDiagnosticEnabled: Bool {
-        diagnosticEnabled
-    }
-
-    nonisolated var supportLogFilePath: String? {
-        supportTarget?.url.path
-    }
-
-    nonisolated var diagnosticLogFilePath: String? {
-        diagnosticTarget?.url.path
+    nonisolated var logFilePath: String? {
+        target?.url.path
     }
 
     private init() {
-        let environment = ProcessInfo.processInfo.environment[Self.environmentKey]
-        let enabledByEnvironment = Self.isEnabledValue(environment)
-        let enabledByDefaults = UserDefaults.standard.bool(forKey: Self.defaultsKey)
-        diagnosticEnabled = enabledByEnvironment || enabledByDefaults
-
         let logsDirectory = FileManager.default
             .urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs", isDirectory: true)
@@ -60,29 +40,37 @@ final class DiagnosticLogger: @unchecked Sendable {
                 withIntermediateDirectories: true
             )
 
-            supportTarget = LogTarget(
-                url: logsDirectory.appendingPathComponent("support.log"),
-                archivedURL: logsDirectory.appendingPathComponent("support.previous.log"),
-                lockURL: logsDirectory.appendingPathComponent("support.log.lock"),
-                maxBytes: 256 * 1024
-            )
+            Self.removeLegacyLogs(in: logsDirectory)
 
-            if diagnosticEnabled {
-                diagnosticTarget = LogTarget(
-                    url: logsDirectory.appendingPathComponent("diagnostic.log"),
-                    archivedURL: logsDirectory.appendingPathComponent("diagnostic.previous.log"),
-                    lockURL: logsDirectory.appendingPathComponent("diagnostic.log.lock"),
-                    maxBytes: 512 * 1024
-                )
-            } else {
-                diagnosticTarget = nil
-            }
+            target = LogTarget(
+                url: logsDirectory.appendingPathComponent("easydmg.log"),
+                archivedURL: logsDirectory.appendingPathComponent("easydmg.previous.log"),
+                lockURL: logsDirectory.appendingPathComponent("easydmg.log.lock"),
+                maxBytes: 512 * 1024
+            )
         } catch {
-            supportTarget = nil
-            diagnosticTarget = nil
+            target = nil
             #if DEBUG
             print("EasyDMG logging unavailable: \(error)")
             #endif
+        }
+    }
+
+    /// One-time best-effort cleanup of the pre-consolidation log files (the old
+    /// support/diagnostic split). Idempotent: once we stop writing these names,
+    /// they never reappear. Prevents users from grabbing a stale log for an issue.
+    nonisolated private static func removeLegacyLogs(in directory: URL) {
+        let legacyNames = [
+            "support.log",
+            "support.previous.log",
+            "support.log.lock",
+            "diagnostic.log",
+            "diagnostic.previous.log",
+            "diagnostic.log.lock"
+        ]
+
+        for name in legacyNames {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
         }
     }
 
@@ -92,43 +80,38 @@ final class DiagnosticLogger: @unchecked Sendable {
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let bundleID = bundle.bundleIdentifier ?? "unknown"
 
-        support(
-            event: "session_start",
-            details: [
-                "bundle_id": bundleID,
-                "diagnostic_logging": diagnosticEnabled ? "enabled" : "disabled",
-                "build": build,
-                "os_version": ProcessInfo.processInfo.operatingSystemVersionString,
-                "version": version
-            ]
-        )
-
-        guard diagnosticEnabled else {
-            return
-        }
-
-        diagnostic("")
-        diagnostic("=== EasyDMG diagnostic session started ===")
-        diagnostic("sessionID=\(sessionID)")
-        diagnostic("bundleID=\(bundleID) version=\(version) build=\(build)")
-        diagnostic("bundlePath=\(bundle.bundlePath)")
-        diagnostic("executablePath=\(bundle.executablePath ?? "unknown")")
-        diagnostic("processID=\(ProcessInfo.processInfo.processIdentifier)")
-        diagnostic("supportLogPath=\(supportLogFilePath ?? "unavailable")")
-        diagnostic("diagnosticLogPath=\(diagnosticLogFilePath ?? "unavailable")")
+        log("")
+        log("=== EasyDMG session started ===")
+        log("date=\(humanReadableDate())")
+        log("sessionID=\(sessionID)")
+        log("bundleID=\(bundleID) version=\(version) build=\(build)")
+        log("os=\(ProcessInfo.processInfo.operatingSystemVersionString)")
+        log("bundlePath=\(bundle.bundlePath)")
+        log("executablePath=\(bundle.executablePath ?? "unknown")")
+        log("processID=\(ProcessInfo.processInfo.processIdentifier)")
+        log("logPath=\(logFilePath ?? "unavailable")")
     }
 
+    /// Structured event with optional key/value details, rendered as one readable
+    /// line. Kept as a convenience for lifecycle events; output goes to the same
+    /// single log as `diagnostic`.
     nonisolated func support(event: String, details: [String: String] = [:]) {
-        guard let supportTarget else {
-            return
-        }
+        let rendered = details.keys.sorted()
+            .compactMap { key -> String? in
+                guard let value = details[key], !value.isEmpty else { return nil }
+                return "\(key)=\(value)"
+            }
+            .joined(separator: " ")
 
-        let renderedLine = renderSupportLine(event: event, details: details)
-        append(line: renderedLine, to: supportTarget)
+        log(rendered.isEmpty ? event : "\(event) — \(rendered)")
     }
 
     nonisolated func diagnostic(_ message: @autoclosure () -> String) {
-        guard let diagnosticTarget else {
+        log(message())
+    }
+
+    nonisolated private func log(_ message: @autoclosure () -> String) {
+        guard let target else {
             return
         }
 
@@ -136,7 +119,7 @@ final class DiagnosticLogger: @unchecked Sendable {
         #if DEBUG
         print(rendered)
         #endif
-        append(line: "[\(timestamp())] \(rendered)\n", to: diagnosticTarget)
+        append(line: "[\(timestamp())] \(rendered)\n", to: target)
     }
 
     nonisolated static func compact(_ value: String, maxLength: Int = 2_000) -> String {
@@ -152,49 +135,17 @@ final class DiagnosticLogger: @unchecked Sendable {
         return "\(compacted.prefix(maxLength))... [truncated]"
     }
 
-    nonisolated private static func isEnabledValue(_ value: String?) -> Bool {
-        guard let value else {
-            return false
-        }
-
-        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "1", "true", "yes", "on", "enabled":
-            return true
-        default:
-            return false
-        }
-    }
-
-    nonisolated private func renderSupportLine(event: String, details: [String: String]) -> String {
-        var components = [
-            "time=\(timestamp())",
-            "session_id=\(escapeSupportValue(sessionID))",
-            "event=\(escapeSupportValue(event))"
-        ]
-
-        for key in details.keys.sorted() {
-            guard let value = details[key], !value.isEmpty else {
-                continue
-            }
-            components.append("\(key)=\(escapeSupportValue(value))")
-        }
-
-        return components.joined(separator: " ") + "\n"
-    }
-
-    nonisolated private func escapeSupportValue(_ value: String) -> String {
-        guard value.rangeOfCharacter(from: CharacterSet(charactersIn: " =\"")) != nil else {
-            return value
-        }
-
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
+    nonisolated private func humanReadableDate() -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        formatter.timeStyle = .short
+        return formatter.string(from: Date())
     }
 
     nonisolated private func timestamp() -> String {
-        ISO8601DateFormatter().string(from: Date())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter.string(from: Date())
     }
 
     nonisolated private func append(line: String, to target: LogTarget) {
