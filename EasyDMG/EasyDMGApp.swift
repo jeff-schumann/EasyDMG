@@ -272,7 +272,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         guard launchModeResolved else {
-            diagnostic("⚠️ Last window closed before launch mode resolved; keeping app alive")
+            diagnostic("Last window closed before launch mode resolved; staying alive")
             return false
         }
 
