@@ -595,7 +595,7 @@ class DMGProcessor: ObservableObject {
             case .passwordProtected:
                 return "Enter its password, then drag the app into Applications."
             case .noAppFound:
-                return "EasyDMG opened \(appName) so you can install it yourself."
+                return "EasyDMG opened it so you can take a look."
             case .multipleAppsFound:
                 return "Choose which app to drag into your Applications folder."
             case .licenseRequired:
@@ -1093,24 +1093,35 @@ class DMGProcessor: ObservableObject {
 
     private func sendManualFallbackNotificationIfAvailable(
         dmgName: String,
+        appName: String? = nil,
         reason: ManualFallbackReason
     ) async {
         guard UserPreferences.shared.feedbackMode != .silent else {
             return
         }
 
-        let appName = manualFallbackAppName(from: dmgName)
-        guard let message = reason.notificationMessage(appName: appName) else {
+        let resolvedName = manualFallbackAppName(explicit: appName, dmgName: dmgName)
+        guard let message = reason.notificationMessage(appName: resolvedName) else {
             return
         }
 
         await sendNotification(
-            title: reason.notificationTitle(appName: appName),
+            title: reason.notificationTitle(appName: resolvedName),
             message: message
         )
     }
 
-    private func manualFallbackAppName(from dmgName: String) -> String {
+    /// Prefers the real bundle name when we have one (stripping `.app`), and otherwise
+    /// falls back to the DMG's filename (stripping `.dmg`).
+    private func manualFallbackAppName(explicit: String?, dmgName: String) -> String {
+        if let explicit {
+            let trimmed = (explicit as NSString)
+                .deletingPathExtension
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
         let strippedName = (dmgName as NSString)
             .deletingPathExtension
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1328,6 +1339,7 @@ class DMGProcessor: ObservableObject {
                     mountPoint: mountPoint,
                     dmgName: currentDMGName,
                     reason: .installerOrAuxiliaryApp,
+                    appName: candidateName,
                     details: [
                         "app": candidateName,
                         "app_count": "1",
@@ -1344,6 +1356,7 @@ class DMGProcessor: ObservableObject {
                     mountPoint: mountPoint,
                     dmgName: currentDMGName,
                     reason: .invalidAppBundle,
+                    appName: candidateName,
                     details: [
                         "app": candidateName,
                         "app_count": "1",
@@ -3486,6 +3499,7 @@ class DMGProcessor: ObservableObject {
         mountPoint: String,
         dmgName: String,
         reason: ManualFallbackReason,
+        appName: String? = nil,
         details: [String: String] = [:]
     ) async {
         var mergedDetails = details
@@ -3505,7 +3519,7 @@ class DMGProcessor: ObservableObject {
             outcome: "manual_fallback",
             details: ["reason": reason.rawValue]
         )
-        await sendManualFallbackNotificationIfAvailable(dmgName: dmgName, reason: reason)
+        await sendManualFallbackNotificationIfAvailable(dmgName: dmgName, appName: appName, reason: reason)
     }
 
     private func openForManualInstallation(
