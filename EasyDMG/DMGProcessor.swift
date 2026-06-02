@@ -1285,8 +1285,11 @@ class DMGProcessor: ObservableObject {
         // Detect encryption up front with the header-only `isencrypted` check, then
         // gate the entire flow on our own password prompt so nothing (Gatekeeper
         // check, dialogs) proceeds until the user has entered the passphrase. The
-        // license preflight is skipped for encrypted images — its metadata can't be
-        // read without the passphrase anyway, and the post-mount guards still apply.
+        // standard passphrase-free license preflight is skipped for encrypted
+        // images: the license flag *can* be read without the passphrase, but doing
+        // so makes hdiutil raise the SecurityAgent prompt (an extra prompt the user
+        // must clear). Instead the license check runs later, inside the unlock loop,
+        // reusing the passphrase the user supplies (see checkEncryptedLicenseAgreement).
         if await isDMGEncrypted(at: url.path, dmgName: currentDMGName) {
             // resolveEncryptedMount handles cancel (abort), the macOS-prompt
             // handoff and genuine mount failures (manual) itself; nil means
