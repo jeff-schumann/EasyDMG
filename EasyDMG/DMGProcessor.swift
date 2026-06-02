@@ -626,11 +626,20 @@ class DMGProcessor: ObservableObject {
         case failed
     }
 
+    /// Outcome of checking encrypted DMG metadata with a supplied passphrase.
+    private enum AuthenticatedLicenseCheckResult: Sendable {
+        case noLicense
+        case licenseRequired
+        case wrongPassword
+        case failed
+    }
+
     /// Outcome of the password prompt + unlock loop for an encrypted DMG.
     private enum EncryptedUnlockOutcome: Sendable {
         case unlocked(mountPoint: String)
         case cancelled        // user dismissed the prompt — abort, don't re-prompt
         case useSystemPrompt  // user opted into the macOS password prompt — hand off to manual
+        case licenseRequired  // metadata says a license agreement needs manual handling
         case failed           // non-authentication mount failure — route to manual
     }
 
@@ -1598,67 +1607,63 @@ class DMGProcessor: ObservableObject {
     }
 
     private func mountDMG(at path: String, dmgName: String, progress: Double) async -> MountResult {
-        diagnostic("Mounting \(path)...")
+        diagnostic("Mounting DMG: \(path)")
         support(event: "mount_start", details: ["dmg": dmgName])
 
         let result = await withMagicFallback(
             message: "Mounting disk image...",
             progress: progress
         ) {
-            DiagnosticLogger.shared.diagnostic("Running hdiutil attach for \(path)")
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-            task.arguments = ["attach", path, "-nobrowse", "-readonly", "-noautoopen", "-plist"]
-
-            let pipe = Pipe()
-            let errorPipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = errorPipe
-
+            let processResult: AssessmentProcessResult
             do {
-                try task.run()
-                task.waitUntilExit()
-
-                guard task.terminationStatus == 0 else {
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    let rawErrorOutput = String(data: errorData, encoding: .utf8) ?? ""
-                    let errorOutput = rawErrorOutput.lowercased()
-                    DiagnosticLogger.shared.diagnostic("Mount failed with status \(task.terminationStatus)")
-                    if !rawErrorOutput.isEmpty {
-                        DiagnosticLogger.shared.diagnostic(
-                            "hdiutil attach stderr: \(DiagnosticLogger.compact(rawErrorOutput))"
-                        )
-                    }
-                    if errorOutput.contains("authentication") ||
-                        errorOutput.contains("passphrase") ||
-                        errorOutput.contains("encrypted")
-                    {
-                        DiagnosticLogger.shared.diagnostic(
-                            "Manual fallback classification: password protected or encrypted DMG"
-                        )
-                        return MountResult.passwordProtected(exitStatus: task.terminationStatus)
-                    }
-                    return MountResult.failed(exitStatus: task.terminationStatus)
-                }
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                DiagnosticLogger.shared.diagnostic("hdiutil attach succeeded")
-                if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                    DiagnosticLogger.shared.diagnostic(
-                        "hdiutil attach stdout: \(DiagnosticLogger.compact(output))"
-                    )
-                }
-
-                guard let mountPoint = Self.parseMountPoint(fromAttachPlist: data) else {
-                    return MountResult.failed(exitStatus: task.terminationStatus)
-                }
-
-                return MountResult.mounted(mountPoint: mountPoint, exitStatus: task.terminationStatus)
-
+                processResult = try await self.runAssessmentProcess(
+                    executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                    arguments: ["attach", path, "-nobrowse", "-readonly", "-noautoopen", "-plist"],
+                    timeout: 60
+                )
             } catch {
                 DiagnosticLogger.shared.diagnostic("Error mounting DMG: \(error)")
                 return MountResult.failed(exitStatus: nil)
             }
+
+            guard !processResult.timedOut, processResult.exitStatus == 0 else {
+                let rawErrorOutput = processResult.standardError
+                let errorOutput = rawErrorOutput.lowercased()
+                let resultLabel = processResult.timedOut
+                    ? "timeout"
+                    : "status \(processResult.exitStatus.map { String($0) } ?? "unknown")"
+                DiagnosticLogger.shared.diagnostic("Mount failed with \(resultLabel)")
+                if !rawErrorOutput.isEmpty {
+                    DiagnosticLogger.shared.diagnostic(
+                        "hdiutil attach stderr: \(DiagnosticLogger.compact(rawErrorOutput))"
+                    )
+                }
+
+                if errorOutput.contains("authentication") ||
+                    errorOutput.contains("passphrase") ||
+                    errorOutput.contains("encrypted") {
+                    DiagnosticLogger.shared.diagnostic(
+                        "Manual fallback classification: password protected or encrypted DMG"
+                    )
+                    return MountResult.passwordProtected(exitStatus: processResult.exitStatus ?? -1)
+                }
+
+                return MountResult.failed(exitStatus: processResult.exitStatus)
+            }
+
+            DiagnosticLogger.shared.diagnostic("hdiutil attach succeeded")
+            if !processResult.standardOutput.isEmpty {
+                DiagnosticLogger.shared.diagnostic(
+                    "hdiutil stdout: \(DiagnosticLogger.compact(processResult.standardOutput))"
+                )
+            }
+
+            let data = Data(processResult.standardOutput.utf8)
+            guard let mountPoint = Self.parseMountPoint(fromAttachPlist: data) else {
+                return MountResult.failed(exitStatus: processResult.exitStatus)
+            }
+
+            return MountResult.mounted(mountPoint: mountPoint, exitStatus: processResult.exitStatus ?? 0)
         }
 
         var details = ["dmg": dmgName]
@@ -1716,6 +1721,27 @@ class DMGProcessor: ObservableObject {
                 return .useSystemPrompt
 
             case let .password(password):
+                switch await checkEncryptedLicenseAgreement(dmgPath: dmgPath, dmgName: dmgName, password: password) {
+                case .noLicense:
+                    break
+
+                case .licenseRequired:
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "license_required", "attempt": String(attempt)])
+                    return .licenseRequired
+
+                case .wrongPassword:
+                    diagnostic("Incorrect DMG password during metadata check (attempt \(attempt))")
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "wrong_password", "attempt": String(attempt)])
+                    attempt += 1
+                    continue
+
+                case .failed:
+                    // Match the unencrypted path: a metadata hiccup alone should not
+                    // block an otherwise valid quick install.
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "license_preflight_failed_continue", "attempt": String(attempt)])
+                    break
+                }
+
                 switch await mountEncryptedDMG(at: dmgPath, dmgName: dmgName, password: password) {
                 case let .mounted(mountPoint):
                     support(event: "password_unlock", details: ["dmg": dmgName, "result": "success", "attempt": String(attempt)])
@@ -1759,6 +1785,14 @@ class DMGProcessor: ObservableObject {
             )
             return nil
 
+        case .licenseRequired:
+            await openForManualInstallation(
+                dmgPath: dmgPath,
+                dmgName: dmgName,
+                reason: .licenseRequired
+            )
+            return nil
+
         case .failed:
             // A genuine (non-authentication) mount failure isn't a password
             // problem, so the manual flow is the right place to land.
@@ -1778,6 +1812,84 @@ class DMGProcessor: ObservableObject {
         diagnostic("Encrypted DMG install aborted (\(reason)); stopping without manual fallback")
         ProgressWindowController.shared.hide()
         recordCompletion(dmgName: dmgName, outcome: "canceled", details: ["reason": reason])
+    }
+
+    /// Check encrypted DMG metadata using the passphrase the user just entered.
+    /// This preserves the license-agreement guard without invoking the system
+    /// password prompt before EasyDMG's own retry loop has made progress.
+    private func checkEncryptedLicenseAgreement(
+        dmgPath: String,
+        dmgName: String,
+        password: String
+    ) async -> AuthenticatedLicenseCheckResult {
+        diagnostic("Checking encrypted disk image metadata for license agreement: \(dmgPath)")
+
+        var passphrase = Data(password.utf8)
+        passphrase.append(0)
+
+        let result: AssessmentProcessResult
+        do {
+            result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                arguments: ["imageinfo", dmgPath, "-stdinpass", "-plist"],
+                timeout: 10,
+                standardInput: passphrase
+            )
+        } catch {
+            diagnostic("Error checking encrypted DMG metadata for license: \(error)")
+            support(
+                event: "license_preflight",
+                details: ["dmg": dmgName, "result": "encrypted_error"]
+            )
+            return .failed
+        }
+
+        guard !result.timedOut, result.exitStatus == 0 else {
+            let stderrLower = result.standardError.lowercased()
+            let looksLikeAuthFailure = stderrLower.contains("authentication")
+                || stderrLower.contains("passphrase")
+                || stderrLower.contains("password")
+            let outcome = result.timedOut
+                ? "encrypted_imageinfo_timeout"
+                : (looksLikeAuthFailure ? "wrong_password" : "encrypted_imageinfo_failed")
+            let exitStatus = result.exitStatus.map { String($0) } ?? "none"
+            diagnostic(
+                "Encrypted license metadata check \(outcome): "
+                    + DiagnosticLogger.compact(result.standardError)
+            )
+            support(
+                event: "license_preflight",
+                details: [
+                    "dmg": dmgName,
+                    "result": outcome,
+                    "exit_status": exitStatus
+                ]
+            )
+            return looksLikeAuthFailure ? .wrongPassword : .failed
+        }
+
+        do {
+            let data = Data(result.standardOutput.utf8)
+            let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            let hasLicense = Self.plistContainsLicenseAgreement(plist)
+            diagnostic("Encrypted license metadata check result: \(hasLicense ? "license_required" : "none")")
+            support(
+                event: "license_preflight",
+                details: [
+                    "dmg": dmgName,
+                    "result": hasLicense ? "license_required" : "none",
+                    "encrypted": "true"
+                ]
+            )
+            return hasLicense ? .licenseRequired : .noLicense
+        } catch {
+            diagnostic("Error parsing encrypted license metadata plist: \(error)")
+            support(
+                event: "license_preflight",
+                details: ["dmg": dmgName, "result": "encrypted_parse_error"]
+            )
+            return .failed
+        }
     }
 
     /// Mount an encrypted DMG using a passphrase supplied over stdin
