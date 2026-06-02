@@ -18,6 +18,12 @@ fileprivate extension String {
     var strippingAppSuffix: String {
         hasSuffix(".app") ? String(dropLast(4)) : self
     }
+
+    /// Strips a trailing `.dmg` for display in user-facing copy.
+    /// Use only for presentation — filesystem paths must keep the suffix.
+    var strippingDMGSuffix: String {
+        lowercased().hasSuffix(".dmg") ? String(dropLast(4)) : self
+    }
 }
 
 fileprivate enum AppManagementDecision {
@@ -611,6 +617,28 @@ class DMGProcessor: ObservableObject {
         case mounted(mountPoint: String, exitStatus: Int32)
         case passwordProtected(exitStatus: Int32)
         case failed(exitStatus: Int32?)
+    }
+
+    /// Outcome of an attempt to mount an encrypted DMG with a supplied passphrase.
+    private enum AuthenticatedMountResult: Sendable {
+        case mounted(mountPoint: String)
+        case wrongPassword
+        case failed
+    }
+
+    /// Outcome of the password prompt + unlock loop for an encrypted DMG.
+    private enum EncryptedUnlockOutcome: Sendable {
+        case unlocked(mountPoint: String)
+        case cancelled        // user dismissed the prompt — abort, don't re-prompt
+        case useSystemPrompt  // user opted into the macOS password prompt — hand off to manual
+        case failed           // non-authentication mount failure — route to manual
+    }
+
+    /// What the user chose at our passphrase prompt.
+    private enum PasswordPromptChoice: Sendable {
+        case password(String)
+        case useSystemPrompt  // "Use macOS Password Prompt…"
+        case cancelled
     }
 
     private enum UnmountResult: Sendable {
@@ -1243,38 +1271,62 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        if await hasLicenseAgreement(dmgPath: url.path, dmgName: currentDMGName) {
-            await openForManualInstallation(
-                dmgPath: url.path,
-                dmgName: currentDMGName,
-                reason: .licenseRequired
-            )
-            return
-        }
-
-        let mountResult = await mountDMG(at: url.path, dmgName: currentDMGName, progress: 0.0)
-
         let mountPoint: String
-        switch mountResult {
-        case let .mounted(resolvedMountPoint, _):
-            mountPoint = resolvedMountPoint
 
-        case .passwordProtected:
-            showProgress("DMG is password-protected, opening for manual install...", progress: 0.0)
-            await openForManualInstallation(
+        // Encrypted DMGs need special handling: a plain `hdiutil attach` — and even
+        // the `imageinfo` license preflight — would surface the macOS SecurityAgent
+        // password prompt and block on it, racing against our own progress flow.
+        // Detect encryption up front with the header-only `isencrypted` check, then
+        // gate the entire flow on our own password prompt so nothing (Gatekeeper
+        // check, dialogs) proceeds until the user has entered the passphrase. The
+        // license preflight is skipped for encrypted images — its metadata can't be
+        // read without the passphrase anyway, and the post-mount guards still apply.
+        if await isDMGEncrypted(at: url.path, dmgName: currentDMGName) {
+            // resolveEncryptedMount handles cancel (abort), the macOS-prompt
+            // handoff and genuine mount failures (manual) itself; nil means
+            // processing should stop.
+            guard let unlockedMountPoint = await resolveEncryptedMount(
                 dmgPath: url.path,
-                dmgName: currentDMGName,
-                reason: .passwordProtected
-            )
-            return
+                dmgName: currentDMGName
+            ) else {
+                return
+            }
+            mountPoint = unlockedMountPoint
+        } else {
+            if await hasLicenseAgreement(dmgPath: url.path, dmgName: currentDMGName) {
+                await openForManualInstallation(
+                    dmgPath: url.path,
+                    dmgName: currentDMGName,
+                    reason: .licenseRequired
+                )
+                return
+            }
 
-        case .failed:
-            await openForManualInstallation(
-                dmgPath: url.path,
-                dmgName: currentDMGName,
-                reason: .genericMountFailure
-            )
-            return
+            switch await mountDMG(at: url.path, dmgName: currentDMGName, progress: 0.0) {
+            case let .mounted(resolvedMountPoint, _):
+                mountPoint = resolvedMountPoint
+
+            case .passwordProtected:
+                // Safety net: `isencrypted` didn't flag it, but the mount still
+                // reported an authentication/passphrase failure. Route through our
+                // own prompt (which also handles cancel/abort) rather than dropping
+                // straight to manual.
+                guard let resolvedMountPoint = await resolveEncryptedMount(
+                    dmgPath: url.path,
+                    dmgName: currentDMGName
+                ) else {
+                    return
+                }
+                mountPoint = resolvedMountPoint
+
+            case .failed:
+                await openForManualInstallation(
+                    dmgPath: url.path,
+                    dmgName: currentDMGName,
+                    reason: .genericMountFailure
+                )
+                return
+            }
         }
 
         showProgress("Scanning for apps...", progress: 0.2)
@@ -1384,6 +1436,44 @@ class DMGProcessor: ObservableObject {
             )
             return
         }
+    }
+
+    /// Returns true if the DMG is encrypted (password-protected). Uses
+    /// `hdiutil isencrypted`, which reads only the image header — it never needs
+    /// the passphrase and never raises a prompt (unlike `attach`/`imageinfo`, which
+    /// surface the macOS SecurityAgent prompt on an encrypted image). On any error
+    /// we default to `false` so a DMG we can't classify falls through to the normal
+    /// mount path rather than wrongly demanding a password.
+    private func isDMGEncrypted(at path: String, dmgName: String) async -> Bool {
+        let result: AssessmentProcessResult
+        do {
+            result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                arguments: ["isencrypted", path],
+                timeout: 10
+            )
+        } catch {
+            diagnostic("Error checking DMG encryption: \(error)")
+            support(event: "encryption_preflight", details: ["dmg": dmgName, "result": "error"])
+            return false
+        }
+
+        guard !result.timedOut, result.exitStatus == 0 else {
+            let outcome = result.timedOut ? "timeout" : "failed"
+            diagnostic(
+                "Encryption check \(outcome): \(DiagnosticLogger.compact(result.standardError))"
+            )
+            support(event: "encryption_preflight", details: ["dmg": dmgName, "result": outcome])
+            return false
+        }
+
+        let encrypted = result.standardOutput.lowercased().contains("encrypted: yes")
+        diagnostic("Encryption check result: \(encrypted ? "encrypted" : "not_encrypted")")
+        support(
+            event: "encryption_preflight",
+            details: ["dmg": dmgName, "result": encrypted ? "encrypted" : "not_encrypted"]
+        )
+        return encrypted
     }
 
     private func hasLicenseAgreement(dmgPath: String, dmgName: String) async -> Bool {
@@ -1591,6 +1681,219 @@ class DMGProcessor: ObservableObject {
         support(event: "mount_result", details: details)
 
         return result
+    }
+
+    /// Prompt for the DMG passphrase and attempt an authenticated mount, retrying
+    /// on a wrong password as many times as the user wants. The distinct outcomes
+    /// let the caller honor the user's intent: a cancel aborts the install rather
+    /// than dropping to the manual flow (which would only re-show a password prompt
+    /// the user just dismissed), while opting into the macOS prompt hands the DMG
+    /// to DiskImageMounter. After two failed attempts the prompt offers that escape
+    /// hatch in case our own field can't unlock an image macOS itself could.
+    private func unlockEncryptedDMG(dmgPath: String, dmgName: String) async -> EncryptedUnlockOutcome {
+        // Number of wrong-password attempts after which we surface the "Use macOS
+        // Password Prompt…" button on the dialog.
+        let attemptsBeforeSystemFallback = 2
+        var attempt = 1
+        while true {
+            let offerSystemPrompt = attempt > attemptsBeforeSystemFallback
+            // Keep one steady message behind the prompt across every attempt rather
+            // than flipping between "Preparing…" and "Unlocking disk image…".
+            showProgress("Enter password to continue...", progress: 0.0)
+            switch await promptForDMGPassword(
+                dmgName: dmgName,
+                isRetry: attempt > 1,
+                offerSystemPrompt: offerSystemPrompt
+            ) {
+            case .cancelled:
+                diagnostic("Password entry cancelled (attempt \(attempt))")
+                support(event: "password_unlock", details: ["dmg": dmgName, "result": "cancelled", "attempt": String(attempt)])
+                return .cancelled
+
+            case .useSystemPrompt:
+                diagnostic("User chose the macOS password prompt (attempt \(attempt))")
+                support(event: "password_unlock", details: ["dmg": dmgName, "result": "use_system_prompt", "attempt": String(attempt)])
+                return .useSystemPrompt
+
+            case let .password(password):
+                switch await mountEncryptedDMG(at: dmgPath, dmgName: dmgName, password: password) {
+                case let .mounted(mountPoint):
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "success", "attempt": String(attempt)])
+                    return .unlocked(mountPoint: mountPoint)
+                case .wrongPassword:
+                    diagnostic("Incorrect DMG password (attempt \(attempt))")
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "wrong_password", "attempt": String(attempt)])
+                    attempt += 1
+                    continue
+                case .failed:
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "mount_failed", "attempt": String(attempt)])
+                    return .failed
+                }
+            }
+        }
+    }
+
+    /// Resolve an encrypted DMG to a mount point, handling each unlock outcome.
+    /// Returns the mount point to continue installing, or `nil` if processing
+    /// should stop because the outcome was already handled (aborted on cancel,
+    /// handed to the macOS prompt, or routed to manual on a genuine mount failure).
+    private func resolveEncryptedMount(dmgPath: String, dmgName: String) async -> String? {
+        switch await unlockEncryptedDMG(dmgPath: dmgPath, dmgName: dmgName) {
+        case let .unlocked(mountPoint):
+            return mountPoint
+
+        case .cancelled:
+            abortEncryptedInstall(dmgName: dmgName, reason: "password_canceled")
+            return nil
+
+        case .useSystemPrompt:
+            // The user asked to let macOS handle the passphrase: hand the DMG to
+            // DiskImageMounter, which surfaces the system SecurityAgent prompt. No
+            // notification — the user made this choice deliberately and the handoff
+            // is self-evident.
+            await openForManualInstallation(
+                dmgPath: dmgPath,
+                dmgName: dmgName,
+                reason: .passwordProtected,
+                notify: false
+            )
+            return nil
+
+        case .failed:
+            // A genuine (non-authentication) mount failure isn't a password
+            // problem, so the manual flow is the right place to land.
+            await openForManualInstallation(
+                dmgPath: dmgPath,
+                dmgName: dmgName,
+                reason: .genericMountFailure
+            )
+            return nil
+        }
+    }
+
+    /// Stop processing an encrypted DMG without falling back to manual. Used when
+    /// the user cancels the password prompt: re-opening the DMG would just surface
+    /// another password prompt, ignoring their intent.
+    private func abortEncryptedInstall(dmgName: String, reason: String) {
+        diagnostic("Encrypted DMG install aborted (\(reason)); stopping without manual fallback")
+        ProgressWindowController.shared.hide()
+        recordCompletion(dmgName: dmgName, outcome: "canceled", details: ["reason": reason])
+    }
+
+    /// Mount an encrypted DMG using a passphrase supplied over stdin
+    /// (`hdiutil -stdinpass`). The passphrase never touches argv — where it would
+    /// be visible in `ps` — and is never written to the diagnostic log.
+    private func mountEncryptedDMG(at path: String, dmgName: String, password: String) async -> AuthenticatedMountResult {
+        diagnostic("Attempting authenticated mount for \(dmgName)...")
+        support(event: "authenticated_mount_start", details: ["dmg": dmgName])
+
+        // hdiutil -stdinpass expects a null-terminated passphrase.
+        var passphrase = Data(password.utf8)
+        passphrase.append(0)
+
+        let result: AssessmentProcessResult
+        do {
+            result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                arguments: ["attach", path, "-stdinpass", "-nobrowse", "-readonly", "-noautoopen", "-plist"],
+                timeout: 60,
+                standardInput: passphrase
+            )
+        } catch {
+            diagnostic("Authenticated mount error: \(error)")
+            support(event: "authenticated_mount_result", details: ["dmg": dmgName, "result": "error"])
+            return .failed
+        }
+
+        guard !result.timedOut, result.exitStatus == 0 else {
+            let stderrLower = result.standardError.lowercased()
+            // A wrong passphrase makes hdiutil exit with an "Authentication error";
+            // treat auth-flavored failures as retryable and anything else (corrupt
+            // image, I/O failure) as a hard failure that drops to manual.
+            let looksLikeAuthFailure = stderrLower.contains("authentication")
+                || stderrLower.contains("passphrase")
+                || stderrLower.contains("password")
+            let resultLabel = result.timedOut
+                ? "timeout"
+                : (looksLikeAuthFailure ? "wrong_password" : "failed")
+            diagnostic("Authenticated mount did not succeed: \(resultLabel)")
+            if !result.standardError.isEmpty {
+                diagnostic("hdiutil -stdinpass stderr: \(DiagnosticLogger.compact(result.standardError))")
+            }
+            support(event: "authenticated_mount_result", details: ["dmg": dmgName, "result": resultLabel])
+            return looksLikeAuthFailure ? .wrongPassword : .failed
+        }
+
+        guard let mountPoint = Self.parseMountPoint(fromAttachPlist: Data(result.standardOutput.utf8)) else {
+            diagnostic("Authenticated mount succeeded but no mount point was found")
+            support(event: "authenticated_mount_result", details: ["dmg": dmgName, "result": "no_mount_point"])
+            return .failed
+        }
+
+        diagnostic("Authenticated mount succeeded")
+        support(
+            event: "authenticated_mount_result",
+            details: ["dmg": dmgName, "result": "success", "volume": volumeName(from: mountPoint)]
+        )
+        return .mounted(mountPoint: mountPoint)
+    }
+
+    /// Ask the user for an encrypted DMG's passphrase. Returns the entered string,
+    /// a request to hand off to the macOS prompt, or a cancel. The entry field masks
+    /// input and the value is never logged. Presented as a hosted sheet so it survives
+    /// the background `.accessory` activation state (see `presentHostedAlert`).
+    ///
+    /// When `offerSystemPrompt` is true the dialog gains a "Use macOS Password Prompt…"
+    /// button — an escape hatch after repeated wrong passwords that lets the system
+    /// SecurityAgent take over via DiskImageMounter.
+    private func promptForDMGPassword(
+        dmgName: String,
+        isRetry: Bool,
+        offerSystemPrompt: Bool
+    ) async -> PasswordPromptChoice {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                let displayName = dmgName.strippingDMGSuffix
+                let alert = NSAlert()
+                alert.alertStyle = isRetry ? .warning : .informational
+                alert.messageText = "“\(displayName)” is password-protected"
+                alert.informativeText = isRetry
+                    ? "Incorrect password. Enter the password to unlock this disk image."
+                    : "Enter the password to unlock this disk image."
+
+                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
+                   let icon = NSImage(contentsOfFile: iconPath) {
+                    alert.icon = icon
+                }
+
+                let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+                passwordField.placeholderString = "Password"
+                alert.accessoryView = passwordField
+                // Focus the field as soon as the sheet appears so the user can type
+                // immediately and press Return to submit.
+                alert.window.initialFirstResponder = passwordField
+
+                // Buttons map to responses by add order: first = .alertFirstButtonReturn,
+                // and so on. The optional system-prompt button sits between Unlock and
+                // Cancel so Cancel stays the last (and Escape-mapped) button.
+                alert.addButton(withTitle: "Unlock")
+                if offerSystemPrompt {
+                    alert.addButton(withTitle: "Use macOS Password Prompt…")
+                }
+                alert.addButton(withTitle: "Cancel")
+
+                presentHostedAlert(alert) { response in
+                    switch response {
+                    case .alertFirstButtonReturn:
+                        continuation.resume(returning: .password(passwordField.stringValue))
+                    case .alertSecondButtonReturn where offerSystemPrompt:
+                        continuation.resume(returning: .useSystemPrompt)
+                    default:
+                        continuation.resume(returning: .cancelled)
+                    }
+                }
+            }
+        }
     }
 
     private func calculateAppSize(at path: String) -> UInt64 {
@@ -3326,15 +3629,20 @@ class DMGProcessor: ObservableObject {
     private nonisolated func runAssessmentProcess(
         executableURL: URL,
         arguments: [String],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        standardInput: Data? = nil
     ) async throws -> AssessmentProcessResult {
         let task = Process()
         task.executableURL = executableURL
         task.arguments = arguments
 
-        // These tools (hdiutil, spctl, codesign) never read stdin; detaching it
-        // ensures a prompt can never wedge the process while we wait on it.
-        task.standardInput = FileHandle.nullDevice
+        // Most callers (spctl, codesign, hdiutil imageinfo) never read stdin, so
+        // we detach it to ensure a prompt can never wedge the process while we
+        // wait on it. The authenticated-mount path is the exception: it supplies
+        // a passphrase via stdin (hdiutil -stdinpass), so we attach a pipe and
+        // write it below.
+        let inputPipe: Pipe? = standardInput == nil ? nil : Pipe()
+        task.standardInput = inputPipe ?? FileHandle.nullDevice
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -3351,6 +3659,19 @@ class DMGProcessor: ObservableObject {
         try task.run()
         outputCollector.startReading()
         errorCollector.startReading()
+
+        // Feed stdin (e.g. the DMG passphrase) once the process is running, then
+        // close the write end so the tool sees EOF. Best-effort: if the process
+        // already exited, the write throws on a broken pipe and we move on.
+        if let inputPipe, let standardInput {
+            let writeHandle = inputPipe.fileHandleForWriting
+            do {
+                try writeHandle.write(contentsOf: standardInput)
+            } catch {
+                DiagnosticLogger.shared.diagnostic("Failed to write process stdin: \(error)")
+            }
+            try? writeHandle.close()
+        }
 
         var timedOut = false
         if await !terminationObserver.wait(timeout: timeout) {
@@ -3526,6 +3847,7 @@ class DMGProcessor: ObservableObject {
         dmgPath: String,
         dmgName: String,
         reason: ManualFallbackReason,
+        notify: Bool = true,
         details: [String: String] = [:]
     ) async {
         var mergedDetails = details
@@ -3563,7 +3885,12 @@ class DMGProcessor: ObservableObject {
             outcome: "manual_fallback",
             details: ["reason": reason.rawValue]
         )
-        await sendManualFallbackNotificationIfAvailable(dmgName: dmgName, reason: reason)
+        // Some callers suppress the notification — e.g. when the user explicitly
+        // chose the macOS password prompt, the handoff is obvious and a notification
+        // would just be noise.
+        if notify {
+            await sendManualFallbackNotificationIfAvailable(dmgName: dmgName, reason: reason)
+        }
     }
 
     private func revealInFinder(path: String) {
