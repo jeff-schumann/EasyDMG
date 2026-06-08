@@ -67,7 +67,13 @@ Don't want to use EasyDMG for a specific DMG? You can still right-click and Open
 
 ## Privacy
 
-EasyDMG is designed to be private by default. 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/53a9f03a-f8cd-4ab5-9bdb-5193f958b09e">
+  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/9a2cc7e2-3d27-4f9b-a4dd-092513da88d3">
+  <img width="100" alt="hamster-folder-clean" src="https://github.com/user-attachments/assets/9a2cc7e2-3d27-4f9b-a4dd-092513da88d3">
+</picture>
+
+EasyDMG is local and private to the core. 
 
 * **Local Only:** All processing happens on your Mac. Your files and data never leave your machine.
 * **No Tracking:** There are no analytics, crash reporters, or third-party trackers.
