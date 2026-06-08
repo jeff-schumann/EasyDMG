@@ -69,7 +69,7 @@ Don't want to use EasyDMG for a specific DMG? You can still right-click and Open
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/53a9f03a-f8cd-4ab5-9bdb-5193f958b09e">
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/9a2cc7e2-3d27-4f9b-a4dd-092513da88d3">
+  <source media="(prefers-color-scheme: light)" srcset="https://github.com/user-attachments/assets/c16077be-5e9e-437a-8e92-45493f196c25">
   <img width="100" alt="hamster-folder-clean" src="https://github.com/user-attachments/assets/9a2cc7e2-3d27-4f9b-a4dd-092513da88d3">
 </picture>
 
