@@ -1916,17 +1916,16 @@ class DMGProcessor: ObservableObject {
             return .unlocked(mountPoint: mountPoint)
         }
 
-        showProgress("Checking saved password...", progress: 0.0)
+        showProgress("Waiting for macOS...", progress: 0.0)
         switch await mountEncryptedDMGWithSavedPasswordIfAvailable(at: dmgPath, dmgName: dmgName) {
         case let .mounted(mountPoint):
-            if await hasLicenseAgreement(dmgPath: dmgPath, dmgName: dmgName) {
-                support(
-                    event: "password_unlock",
-                    details: ["dmg": dmgName, "result": "saved_password_license_required"]
-                )
-                return .licenseRequired
-            }
-
+            // No license check here. DiskImageMounter enforces any software license
+            // agreement natively before it will mount — so holding a mount point means
+            // the user has already seen and accepted it. Re-checking with the
+            // passphrase-free `imageinfo` would only re-trigger the macOS SecurityAgent
+            // password prompt (a second prompt), which is exactly what we're avoiding.
+            // The hdiutil-based paths (unencrypted mount, manual passphrase fallback)
+            // keep their own checks because hdiutil silently skips the agreement.
             support(event: "password_unlock", details: ["dmg": dmgName, "result": "saved_password"])
             return .unlocked(mountPoint: mountPoint)
 
