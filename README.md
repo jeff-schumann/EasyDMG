@@ -12,11 +12,11 @@
 
 ## What EasyDMG Does
 
-After setting EasyDMG as your default app for opening DMGs (instructions below - but it's just "click the button"), opening any DMG will automatically:
+After setting EasyDMG as your default app for opening DMGs, opening any DMG will automatically:
 
 1. Mount the DMG
 2. Perform macOS security check
-3. Copy the app to /Applications folder
+3. Install the app to /Applications
 4. Open the app directly, or open Finder and highlight the app
 5. Unmount the DMG
 6. Trash the DMG
@@ -31,7 +31,7 @@ After setting EasyDMG as your default app for opening DMGs (instructions below -
 - **Cautious by default**: If EasyDMG encounters anything unusual (license agreements, multiple apps, pkg installers), it opens the DMG and lets you handle it manually. It only automates the simple, common case.
 - **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, the rest take one click, and you can disable the prompt entirely in Settings. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 - **Automatic updates**: Built-in Sparkle integration for easy updates
-- **It's fun**: The wizard hamster updates you on his silly antics in the progress bar 🪄
+- **It's fun**: The wizard hamster updates you on his silly antics in the progress bar. See more hamster wizard on the [website](https://easydmg.app).
 
 ## Screenshots
 
