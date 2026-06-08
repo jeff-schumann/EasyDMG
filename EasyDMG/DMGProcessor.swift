@@ -619,6 +619,13 @@ class DMGProcessor: ObservableObject {
         case failed(exitStatus: Int32?)
     }
 
+    /// One mount attempt's outcome. `timedOut` lets the retry loop avoid
+    /// re-running a 60s hang while still retrying a fast, transient failure.
+    private struct MountAttemptOutcome: Sendable {
+        let result: MountResult
+        let timedOut: Bool
+    }
+
     /// Outcome of an attempt to mount an encrypted DMG with a supplied passphrase.
     private enum AuthenticatedMountResult: Sendable {
         case mounted(mountPoint: String)
@@ -1602,80 +1609,117 @@ class DMGProcessor: ObservableObject {
     }
 
     private func mountDMG(at path: String, dmgName: String, progress: Double) async -> MountResult {
-        support(event: "mount_start", details: ["dmg": dmgName])
+        // A known-good DMG occasionally fails to mount on the first try and then
+        // mounts fine moments later — a transient macOS/hdiutil glitch rather than
+        // a bad image. Retry a generic failure a couple of times with a short
+        // backoff before giving up to manual. We deliberately do NOT retry:
+        //   • a password/encryption failure — it has its own prompt + retry flow, or
+        //   • a timeout — a 60s hang shouldn't be multiplied into minutes of waiting.
+        let maxAttempts = 3
+        let retryBackoff: UInt64 = 600_000_000 // 0.6s
 
-        let result = await withMagicFallback(
-            message: "Mounting disk image...",
-            progress: progress
-        ) {
-            let processResult: AssessmentProcessResult
-            do {
-                processResult = try await self.runAssessmentProcess(
-                    executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
-                    arguments: ["attach", path, "-nobrowse", "-readonly", "-noautoopen", "-plist"],
-                    timeout: 60
+        var lastResult: MountResult = .failed(exitStatus: nil)
+
+        for attempt in 1...maxAttempts {
+            support(event: "mount_start", details: ["dmg": dmgName, "attempt": String(attempt)])
+
+            let outcome = await withMagicFallback(
+                message: "Mounting disk image...",
+                progress: progress
+            ) { () -> MountAttemptOutcome in
+                let processResult: AssessmentProcessResult
+                do {
+                    processResult = try await self.runAssessmentProcess(
+                        executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                        arguments: ["attach", path, "-nobrowse", "-readonly", "-noautoopen", "-plist"],
+                        timeout: 60
+                    )
+                } catch {
+                    DiagnosticLogger.shared.diagnostic("Error mounting DMG: \(error)")
+                    return MountAttemptOutcome(result: .failed(exitStatus: nil), timedOut: false)
+                }
+
+                guard !processResult.timedOut, processResult.exitStatus == 0 else {
+                    let rawErrorOutput = processResult.standardError
+                    let errorOutput = rawErrorOutput.lowercased()
+                    let resultLabel = processResult.timedOut
+                        ? "timeout"
+                        : "status \(processResult.exitStatus.map { String($0) } ?? "unknown")"
+                    DiagnosticLogger.shared.diagnostic("Mount failed with \(resultLabel)")
+                    if !rawErrorOutput.isEmpty {
+                        DiagnosticLogger.shared.diagnostic(
+                            "hdiutil attach stderr: \(DiagnosticLogger.compact(rawErrorOutput))"
+                        )
+                    }
+
+                    if errorOutput.contains("authentication") ||
+                        errorOutput.contains("passphrase") ||
+                        errorOutput.contains("encrypted") {
+                        DiagnosticLogger.shared.diagnostic(
+                            "Manual fallback classification: password protected or encrypted DMG"
+                        )
+                        return MountAttemptOutcome(
+                            result: .passwordProtected(exitStatus: processResult.exitStatus ?? -1),
+                            timedOut: false
+                        )
+                    }
+
+                    return MountAttemptOutcome(
+                        result: .failed(exitStatus: processResult.exitStatus),
+                        timedOut: processResult.timedOut
+                    )
+                }
+
+                let data = Data(processResult.standardOutput.utf8)
+                guard let mountPoint = Self.parseMountPoint(fromAttachPlist: data) else {
+                    return MountAttemptOutcome(result: .failed(exitStatus: processResult.exitStatus), timedOut: false)
+                }
+
+                return MountAttemptOutcome(
+                    result: .mounted(mountPoint: mountPoint, exitStatus: processResult.exitStatus ?? 0),
+                    timedOut: false
                 )
-            } catch {
-                DiagnosticLogger.shared.diagnostic("Error mounting DMG: \(error)")
-                return MountResult.failed(exitStatus: nil)
             }
 
-            guard !processResult.timedOut, processResult.exitStatus == 0 else {
-                let rawErrorOutput = processResult.standardError
-                let errorOutput = rawErrorOutput.lowercased()
-                let resultLabel = processResult.timedOut
-                    ? "timeout"
-                    : "status \(processResult.exitStatus.map { String($0) } ?? "unknown")"
-                DiagnosticLogger.shared.diagnostic("Mount failed with \(resultLabel)")
-                if !rawErrorOutput.isEmpty {
-                    DiagnosticLogger.shared.diagnostic(
-                        "hdiutil attach stderr: \(DiagnosticLogger.compact(rawErrorOutput))"
-                    )
-                }
+            let result = outcome.result
+            lastResult = result
 
-                if errorOutput.contains("authentication") ||
-                    errorOutput.contains("passphrase") ||
-                    errorOutput.contains("encrypted") {
-                    DiagnosticLogger.shared.diagnostic(
-                        "Manual fallback classification: password protected or encrypted DMG"
-                    )
-                    return MountResult.passwordProtected(exitStatus: processResult.exitStatus ?? -1)
-                }
-
-                return MountResult.failed(exitStatus: processResult.exitStatus)
-            }
-
-            if !processResult.standardOutput.isEmpty {
-            }
-
-            let data = Data(processResult.standardOutput.utf8)
-            guard let mountPoint = Self.parseMountPoint(fromAttachPlist: data) else {
-                return MountResult.failed(exitStatus: processResult.exitStatus)
-            }
-
-            return MountResult.mounted(mountPoint: mountPoint, exitStatus: processResult.exitStatus ?? 0)
-        }
-
-        var details = ["dmg": dmgName]
-        switch result {
-        case let .mounted(mountPoint, exitStatus):
-            details["exit_status"] = String(exitStatus)
-            details["result"] = "success"
-            details["volume"] = volumeName(from: mountPoint)
-
-        case let .passwordProtected(exitStatus):
-            details["exit_status"] = String(exitStatus)
-            details["result"] = "password_protected"
-
-        case let .failed(exitStatus):
-            if let exitStatus {
+            var details = ["dmg": dmgName, "attempt": String(attempt)]
+            switch result {
+            case let .mounted(mountPoint, exitStatus):
                 details["exit_status"] = String(exitStatus)
-            }
-            details["result"] = "failed"
-        }
-        support(event: "mount_result", details: details)
+                details["result"] = "success"
+                details["volume"] = volumeName(from: mountPoint)
 
-        return result
+            case let .passwordProtected(exitStatus):
+                details["exit_status"] = String(exitStatus)
+                details["result"] = "password_protected"
+
+            case let .failed(exitStatus):
+                if let exitStatus {
+                    details["exit_status"] = String(exitStatus)
+                }
+                details["result"] = "failed"
+            }
+            support(event: "mount_result", details: details)
+
+            // Success and password/encryption failures are terminal — hand straight
+            // back to the caller. Only a fast, generic failure is worth retrying.
+            switch result {
+            case .mounted, .passwordProtected:
+                return result
+            case .failed:
+                guard !outcome.timedOut, attempt < maxAttempts else {
+                    return result
+                }
+                DiagnosticLogger.shared.diagnostic(
+                    "Mount attempt \(attempt) failed; retrying (attempt \(attempt + 1) of \(maxAttempts))"
+                )
+                try? await Task.sleep(nanoseconds: retryBackoff)
+            }
+        }
+
+        return lastResult
     }
 
     /// Prompt for the DMG passphrase and attempt an authenticated mount, retrying
