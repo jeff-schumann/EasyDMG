@@ -60,3 +60,6 @@ Temporary Items
 
 # Sensitive build configuration
 exportOptions.plist
+.env
+.env.*
+!.env.example

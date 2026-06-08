@@ -630,7 +630,15 @@ class DMGProcessor: ObservableObject {
     private enum AuthenticatedMountResult: Sendable {
         case mounted(mountPoint: String)
         case wrongPassword
+        case timedOut
         case failed
+    }
+
+    private enum SavedPasswordMountResult: Sendable {
+        case mounted(mountPoint: String)
+        case dismissed
+        case timedOut
+        case unavailable
     }
 
     /// Outcome of checking encrypted DMG metadata with a supplied passphrase.
@@ -646,6 +654,7 @@ class DMGProcessor: ObservableObject {
         case unlocked(mountPoint: String)
         case cancelled        // user dismissed the prompt — abort, don't re-prompt
         case useSystemPrompt  // user opted into the macOS password prompt — hand off to manual
+        case systemPromptStarted // macOS prompt is already handling the unlock
         case licenseRequired  // metadata says a license agreement needs manual handling
         case failed           // non-authentication mount failure — route to manual
     }
@@ -1608,6 +1617,171 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    /// Normalize a path for comparing against `hdiutil info`'s `image-path`, which
+    /// reports the fully resolved location. Without this, /Users vs the symlinked
+    /// /System/Volumes/Data/Users form (or any other symlink in the path) would
+    /// look like two different images.
+    private nonisolated static func normalizedImagePath(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    }
+
+    /// Scan `hdiutil info -plist` for an already-attached copy of `dmgPath` and
+    /// return its mount point, if any. An encrypted image only appears here once it
+    /// has already been unlocked with the correct passphrase, so a hit means the
+    /// volume is genuinely open and safe to reuse.
+    private nonisolated static func parseExistingMountPoint(
+        fromInfoPlist data: Data,
+        matching dmgPath: String
+    ) -> String? {
+        let target = normalizedImagePath(dmgPath)
+        do {
+            let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            guard let root = plist as? [String: Any],
+                  let images = root["images"] as? [[String: Any]] else {
+                return nil
+            }
+
+            for image in images {
+                guard let imagePath = image["image-path"] as? String,
+                      normalizedImagePath(imagePath) == target,
+                      let entities = image["system-entities"] as? [[String: Any]] else {
+                    continue
+                }
+                for entity in entities {
+                    if let mountPoint = entity["mount-point"] as? String, !mountPoint.isEmpty {
+                        return mountPoint
+                    }
+                }
+            }
+            return nil
+        } catch {
+            DiagnosticLogger.shared.diagnostic("Failed to parse hdiutil info plist output: \(error)")
+            return nil
+        }
+    }
+
+    /// Return the mount point of an already-open copy of this DMG, or nil if it
+    /// isn't currently attached. Used to skip the passphrase prompt entirely when
+    /// the encrypted image is already unlocked — re-prompting would be pointless
+    /// (the contents are already exposed) and hdiutil accepts any passphrase, even
+    /// a wrong one, against an image that is already attached.
+    private func existingMountPoint(
+        forDMGPath dmgPath: String,
+        dmgName: String,
+        timeout: TimeInterval = 15,
+        logFailure: Bool = true
+    ) async -> String? {
+        let result: AssessmentProcessResult
+        do {
+            result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                arguments: ["info", "-plist"],
+                timeout: timeout
+            )
+        } catch {
+            if logFailure {
+                diagnostic("Could not check for an already-mounted copy of \(dmgName): \(error)")
+            }
+            return nil
+        }
+
+        guard !result.timedOut, result.exitStatus == 0 else {
+            return nil
+        }
+
+        return Self.parseExistingMountPoint(
+            fromInfoPlist: Data(result.standardOutput.utf8),
+            matching: dmgPath
+        )
+    }
+
+    /// Ask DiskImageMounter to open the encrypted image, then watch for the mounted
+    /// volume. This lets macOS use a saved Keychain passphrase or show its own
+    /// password prompt without EasyDMG ever showing a competing prompt.
+    private func mountEncryptedDMGWithSavedPasswordIfAvailable(
+        at path: String,
+        dmgName: String
+    ) async -> SavedPasswordMountResult {
+        support(event: "saved_password_mount_start", details: ["dmg": dmgName])
+
+        let runningApp = await openDMGInDiskImageMounterForUnlock(path: path, dmgName: dmgName)
+        guard let runningApp else {
+            support(
+                event: "saved_password_mount_result",
+                details: ["dmg": dmgName, "result": "open_failed"]
+            )
+            return .unavailable
+        }
+
+        let deadline = Date().addingTimeInterval(90)
+        let earliestDismissalCheck = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            if let mountPoint = await existingMountPoint(
+                forDMGPath: path,
+                dmgName: dmgName,
+                timeout: 2,
+                logFailure: false
+            ) {
+                diagnostic("Encrypted DMG unlocked by macOS at \(mountPoint)")
+                support(
+                    event: "saved_password_mount_result",
+                    details: [
+                        "dmg": dmgName,
+                        "result": "success",
+                        "volume": volumeName(from: mountPoint),
+                    ]
+                )
+                return .mounted(mountPoint: mountPoint)
+            }
+
+            if Date() >= earliestDismissalCheck && runningApp.isTerminated {
+                diagnostic("DiskImageMounter closed without mounting \(dmgName)")
+                support(
+                    event: "saved_password_mount_result",
+                    details: ["dmg": dmgName, "result": "system_prompt_dismissed"]
+                )
+                return .dismissed
+            }
+
+            try? await Task.sleep(nanoseconds: 350_000_000)
+        }
+
+        diagnostic("macOS password prompt did not mount \(dmgName) before EasyDMG stopped waiting")
+        support(
+            event: "saved_password_mount_result",
+            details: ["dmg": dmgName, "result": "system_prompt_wait_timeout"]
+        )
+        return .timedOut
+    }
+
+    private func openDMGInDiskImageMounterForUnlock(path: String, dmgName: String) async -> NSRunningApplication? {
+        await withCheckedContinuation { continuation in
+            let dmgURL = URL(fileURLWithPath: path)
+            let mounterURL = URL(fileURLWithPath: "/System/Library/CoreServices/DiskImageMounter.app")
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+
+            NSWorkspace.shared.open([dmgURL], withApplicationAt: mounterURL, configuration: configuration) { app, error in
+                if let error {
+                    DiagnosticLogger.shared.diagnostic(
+                        "Failed to open encrypted DMG in DiskImageMounter: \(error)"
+                    )
+                    DiagnosticLogger.shared.support(
+                        event: "saved_password_mount_open_error",
+                        details: [
+                            "dmg": dmgName,
+                            "error_domain": (error as NSError).domain,
+                            "error_code": String((error as NSError).code),
+                        ]
+                    )
+                    continuation.resume(returning: nil)
+                } else {
+                    continuation.resume(returning: app)
+                }
+            }
+        }
+    }
+
     private func mountDMG(at path: String, dmgName: String, progress: Double) async -> MountResult {
         // A known-good DMG occasionally fails to mount on the first try and then
         // mounts fine moments later — a transient macOS/hdiutil glitch rather than
@@ -1730,6 +1904,44 @@ class DMGProcessor: ObservableObject {
     /// to DiskImageMounter. After two failed attempts the prompt offers that escape
     /// hatch in case our own field can't unlock an image macOS itself could.
     private func unlockEncryptedDMG(dmgPath: String, dmgName: String) async -> EncryptedUnlockOutcome {
+        // If this DMG is already attached — from a prior run, a leftover mount, or
+        // the user having opened it manually — it has already been unlocked with the
+        // correct passphrase. Reuse it and skip the prompt entirely: asking again
+        // would be pointless (the contents are already exposed) and, worse, hdiutil
+        // accepts any passphrase against an already-attached image, so a mistyped
+        // password would appear to "work."
+        if let mountPoint = await existingMountPoint(forDMGPath: dmgPath, dmgName: dmgName) {
+            diagnostic("Encrypted DMG already mounted at \(mountPoint); reusing without prompting")
+            support(event: "password_unlock", details: ["dmg": dmgName, "result": "already_mounted"])
+            return .unlocked(mountPoint: mountPoint)
+        }
+
+        showProgress("Checking saved password...", progress: 0.0)
+        switch await mountEncryptedDMGWithSavedPasswordIfAvailable(at: dmgPath, dmgName: dmgName) {
+        case let .mounted(mountPoint):
+            if await hasLicenseAgreement(dmgPath: dmgPath, dmgName: dmgName) {
+                support(
+                    event: "password_unlock",
+                    details: ["dmg": dmgName, "result": "saved_password_license_required"]
+                )
+                return .licenseRequired
+            }
+
+            support(event: "password_unlock", details: ["dmg": dmgName, "result": "saved_password"])
+            return .unlocked(mountPoint: mountPoint)
+
+        case .dismissed:
+            support(event: "password_unlock", details: ["dmg": dmgName, "result": "system_prompt_dismissed"])
+            return .cancelled
+
+        case .timedOut:
+            support(event: "password_unlock", details: ["dmg": dmgName, "result": "saved_password_timeout"])
+            return .systemPromptStarted
+
+        case .unavailable:
+            support(event: "password_unlock", details: ["dmg": dmgName, "result": "saved_password_unavailable"])
+        }
+
         // Number of wrong-password attempts after which we surface the "Use macOS
         // Password Prompt…" button on the dialog.
         let attemptsBeforeSystemFallback = 2
@@ -1755,7 +1967,7 @@ class DMGProcessor: ObservableObject {
                 return .useSystemPrompt
 
             case let .password(password):
-                switch await checkEncryptedLicenseAgreement(dmgPath: dmgPath, dmgName: dmgName, password: password) {
+                switch await checkEncryptedLicenseAgreementWithRetry(dmgPath: dmgPath, dmgName: dmgName, password: password) {
                 case .noLicense:
                     break
 
@@ -1776,7 +1988,7 @@ class DMGProcessor: ObservableObject {
                     break
                 }
 
-                switch await mountEncryptedDMG(at: dmgPath, dmgName: dmgName, password: password) {
+                switch await mountEncryptedDMGWithRetry(at: dmgPath, dmgName: dmgName, password: password) {
                 case let .mounted(mountPoint):
                     support(event: "password_unlock", details: ["dmg": dmgName, "result": "success", "attempt": String(attempt)])
                     return .unlocked(mountPoint: mountPoint)
@@ -1788,8 +2000,12 @@ class DMGProcessor: ObservableObject {
                 case .failed:
                     support(event: "password_unlock", details: ["dmg": dmgName, "result": "mount_failed", "attempt": String(attempt)])
                     return .failed
-                }
+
+                case .timedOut:
+                    support(event: "password_unlock", details: ["dmg": dmgName, "result": "mount_timeout", "attempt": String(attempt)])
+                    return .failed
             }
+        }
         }
     }
 
@@ -1816,6 +2032,25 @@ class DMGProcessor: ObservableObject {
                 dmgName: dmgName,
                 reason: .passwordProtected,
                 notify: false
+            )
+            return nil
+
+        case .systemPromptStarted:
+            diagnostic("Encrypted DMG handed to macOS password prompt; stopping EasyDMG prompt flow")
+            support(
+                event: "manual_fallback",
+                details: [
+                    "dmg": dmgName,
+                    "reason": ManualFallbackReason.passwordProtected.rawValue,
+                    "system_prompt_started": "true",
+                    "target": "dmg",
+                ]
+            )
+            ProgressWindowController.shared.hide()
+            recordCompletion(
+                dmgName: dmgName,
+                outcome: "manual_fallback",
+                details: ["reason": ManualFallbackReason.passwordProtected.rawValue]
             )
             return nil
 
@@ -1848,13 +2083,63 @@ class DMGProcessor: ObservableObject {
         recordCompletion(dmgName: dmgName, outcome: "canceled", details: ["reason": reason])
     }
 
+    private nonisolated static func looksLikeEncryptedAuthFailure(_ output: String) -> Bool {
+        // In the unsandboxed app path, wrong passphrases surface as
+        // "Authentication error" across both imageinfo and attach. "Device not
+        // configured" is ambiguous and can be introduced by sandboxed hdiutil
+        // runs, so it is deliberately excluded: retry/drop to manual, do not
+        // call it a wrong password.
+        let lowercasedOutput = output.lowercased()
+        return lowercasedOutput.contains("authentication")
+            || lowercasedOutput.contains("passphrase")
+            || lowercasedOutput.contains("password")
+    }
+
+    private func checkEncryptedLicenseAgreementWithRetry(
+        dmgPath: String,
+        dmgName: String,
+        password: String
+    ) async -> AuthenticatedLicenseCheckResult {
+        let maxAttempts = 2
+        let retryBackoff: UInt64 = 600_000_000
+
+        for attempt in 1...maxAttempts {
+            let result = await checkEncryptedLicenseAgreement(
+                dmgPath: dmgPath,
+                dmgName: dmgName,
+                password: password,
+                attempt: attempt
+            )
+
+            guard case .failed = result, attempt < maxAttempts else {
+                return result
+            }
+
+            diagnostic(
+                "Encrypted license metadata check failed; retrying (attempt \(attempt + 1) of \(maxAttempts))"
+            )
+            support(
+                event: "license_preflight_retry",
+                details: [
+                    "dmg": dmgName,
+                    "after_attempt": String(attempt),
+                    "next_attempt": String(attempt + 1),
+                ]
+            )
+            try? await Task.sleep(nanoseconds: retryBackoff)
+        }
+
+        return .failed
+    }
+
     /// Check encrypted DMG metadata using the passphrase the user just entered.
     /// This preserves the license-agreement guard without invoking the system
     /// password prompt before EasyDMG's own retry loop has made progress.
     private func checkEncryptedLicenseAgreement(
         dmgPath: String,
         dmgName: String,
-        password: String
+        password: String,
+        attempt: Int = 1
     ) async -> AuthenticatedLicenseCheckResult {
 
         var passphrase = Data(password.utf8)
@@ -1872,30 +2157,35 @@ class DMGProcessor: ObservableObject {
             diagnostic("Error checking encrypted DMG metadata for license: \(error)")
             support(
                 event: "license_preflight",
-                details: ["dmg": dmgName, "result": "encrypted_error"]
+                details: [
+                    "dmg": dmgName,
+                    "result": "encrypted_error",
+                    "attempt": String(attempt),
+                ]
             )
             return .failed
         }
 
         guard !result.timedOut, result.exitStatus == 0 else {
-            let stderrLower = result.standardError.lowercased()
-            let looksLikeAuthFailure = stderrLower.contains("authentication")
-                || stderrLower.contains("passphrase")
-                || stderrLower.contains("password")
+            let combinedOutput = [result.standardError, result.standardOutput]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            let looksLikeAuthFailure = Self.looksLikeEncryptedAuthFailure(combinedOutput)
             let outcome = result.timedOut
                 ? "encrypted_imageinfo_timeout"
                 : (looksLikeAuthFailure ? "wrong_password" : "encrypted_imageinfo_failed")
             let exitStatus = result.exitStatus.map { String($0) } ?? "none"
             diagnostic(
-                "Encrypted license metadata check \(outcome): "
-                    + DiagnosticLogger.compact(result.standardError)
+                "Encrypted license metadata check \(outcome) on attempt \(attempt): "
+                    + DiagnosticLogger.compact(combinedOutput)
             )
             support(
                 event: "license_preflight",
                 details: [
                     "dmg": dmgName,
                     "result": outcome,
-                    "exit_status": exitStatus
+                    "exit_status": exitStatus,
+                    "attempt": String(attempt),
                 ]
             )
             return looksLikeAuthFailure ? .wrongPassword : .failed
@@ -1910,7 +2200,8 @@ class DMGProcessor: ObservableObject {
                 details: [
                     "dmg": dmgName,
                     "result": hasLicense ? "license_required" : "none",
-                    "encrypted": "true"
+                    "encrypted": "true",
+                    "attempt": String(attempt),
                 ]
             )
             return hasLicense ? .licenseRequired : .noLicense
@@ -1918,17 +2209,67 @@ class DMGProcessor: ObservableObject {
             diagnostic("Error parsing encrypted license metadata plist: \(error)")
             support(
                 event: "license_preflight",
-                details: ["dmg": dmgName, "result": "encrypted_parse_error"]
+                details: [
+                    "dmg": dmgName,
+                    "result": "encrypted_parse_error",
+                    "attempt": String(attempt),
+                ]
             )
             return .failed
         }
     }
 
+    private func mountEncryptedDMGWithRetry(
+        at path: String,
+        dmgName: String,
+        password: String
+    ) async -> AuthenticatedMountResult {
+        let maxAttempts = 2
+        let retryBackoff: UInt64 = 600_000_000
+
+        for attempt in 1...maxAttempts {
+            let result = await mountEncryptedDMG(
+                at: path,
+                dmgName: dmgName,
+                password: password,
+                attempt: attempt
+            )
+
+            switch result {
+            case .failed where attempt < maxAttempts:
+                diagnostic(
+                    "Authenticated mount failed; retrying (attempt \(attempt + 1) of \(maxAttempts))"
+                )
+                support(
+                    event: "authenticated_mount_retry",
+                    details: [
+                        "dmg": dmgName,
+                        "after_attempt": String(attempt),
+                        "next_attempt": String(attempt + 1),
+                    ]
+                )
+                try? await Task.sleep(nanoseconds: retryBackoff)
+                continue
+
+            // A timeout is not retried here; unlike a near-instant failure, each
+            // attempt costs the full hdiutil timeout. Propagate it so the caller
+            // can record mount_timeout before dropping to manual.
+            default:
+                return result
+            }
+        }
+
+        return .failed
+    }
+
     /// Mount an encrypted DMG using a passphrase supplied over stdin
     /// (`hdiutil -stdinpass`). The passphrase never touches argv — where it would
     /// be visible in `ps` — and is never written to the diagnostic log.
-    private func mountEncryptedDMG(at path: String, dmgName: String, password: String) async -> AuthenticatedMountResult {
-        support(event: "authenticated_mount_start", details: ["dmg": dmgName])
+    private func mountEncryptedDMG(at path: String, dmgName: String, password: String, attempt: Int = 1) async -> AuthenticatedMountResult {
+        support(
+            event: "authenticated_mount_start",
+            details: ["dmg": dmgName, "attempt": String(attempt)]
+        )
 
         // hdiutil -stdinpass expects a null-terminated passphrase.
         var passphrase = Data(password.utf8)
@@ -1944,38 +2285,69 @@ class DMGProcessor: ObservableObject {
             )
         } catch {
             diagnostic("Authenticated mount error: \(error)")
-            support(event: "authenticated_mount_result", details: ["dmg": dmgName, "result": "error"])
+            support(
+                event: "authenticated_mount_result",
+                details: [
+                    "dmg": dmgName,
+                    "result": "error",
+                    "attempt": String(attempt),
+                ]
+            )
             return .failed
         }
 
         guard !result.timedOut, result.exitStatus == 0 else {
-            let stderrLower = result.standardError.lowercased()
             // A wrong passphrase makes hdiutil exit with an "Authentication error";
             // treat auth-flavored failures as retryable and anything else (corrupt
             // image, I/O failure) as a hard failure that drops to manual.
-            let looksLikeAuthFailure = stderrLower.contains("authentication")
-                || stderrLower.contains("passphrase")
-                || stderrLower.contains("password")
+            let combinedOutput = [result.standardError, result.standardOutput]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            let looksLikeAuthFailure = Self.looksLikeEncryptedAuthFailure(combinedOutput)
             let resultLabel = result.timedOut
                 ? "timeout"
                 : (looksLikeAuthFailure ? "wrong_password" : "failed")
             diagnostic("Authenticated mount did not succeed: \(resultLabel)")
             if !result.standardError.isEmpty {
-                diagnostic("hdiutil -stdinpass stderr: \(DiagnosticLogger.compact(result.standardError))")
+                diagnostic("hdiutil -stdinpass output: \(DiagnosticLogger.compact(combinedOutput))")
             }
-            support(event: "authenticated_mount_result", details: ["dmg": dmgName, "result": resultLabel])
-            return looksLikeAuthFailure ? .wrongPassword : .failed
+            support(
+                event: "authenticated_mount_result",
+                details: [
+                    "dmg": dmgName,
+                    "result": resultLabel,
+                    "attempt": String(attempt),
+                ]
+            )
+
+            if looksLikeAuthFailure {
+                return .wrongPassword
+            }
+
+            return result.timedOut ? .timedOut : .failed
         }
 
         guard let mountPoint = Self.parseMountPoint(fromAttachPlist: Data(result.standardOutput.utf8)) else {
             diagnostic("Authenticated mount succeeded but no mount point was found")
-            support(event: "authenticated_mount_result", details: ["dmg": dmgName, "result": "no_mount_point"])
+            support(
+                event: "authenticated_mount_result",
+                details: [
+                    "dmg": dmgName,
+                    "result": "no_mount_point",
+                    "attempt": String(attempt),
+                ]
+            )
             return .failed
         }
 
         support(
             event: "authenticated_mount_result",
-            details: ["dmg": dmgName, "result": "success", "volume": volumeName(from: mountPoint)]
+            details: [
+                "dmg": dmgName,
+                "result": "success",
+                "volume": volumeName(from: mountPoint),
+                "attempt": String(attempt),
+            ]
         )
         return .mounted(mountPoint: mountPoint)
     }
