@@ -570,11 +570,17 @@ class DMGProcessor: ObservableObject {
         func notificationTitle(appName: String) -> String {
             switch self {
             case .invalidAppBundle, .genericMountFailure:
-                return "Finish installing \(appName)"
+                return "The hamster bows out 🐹"
             case .packageInstaller:
                 return "\(appName) uses a .pkg installer"
             case .installerOrAuxiliaryApp:
                 return "\(appName) uses an installer"
+            // Dead copy as of the new password flow: every password path now exits
+            // through resolveEncryptedMount, which either auto-installs, uses our own
+            // dialog, or hands off to the macOS prompt with notify:false — so this
+            // title is never shown. Kept for this release as a safety net until the
+            // new flow has proven stable in the wild. (Note the message below is also
+            // stale and describes the old behavior.)
             case .passwordProtected:
                 return "\(appName) is password-protected"
             case .noAppFound:
@@ -598,6 +604,9 @@ class DMGProcessor: ObservableObject {
                 return "Open the installer in the window and follow the steps."
             case .installerOrAuxiliaryApp:
                 return "Open it in the window and follow the steps to finish."
+            // Dead + stale copy — see the note on .passwordProtected in
+            // notificationTitle. Not shown by the current flow; left in for this
+            // release pending confidence in the new password flow's stability.
             case .passwordProtected:
                 return "Enter its password, then drag the app into Applications."
             case .noAppFound:
@@ -939,7 +948,7 @@ class DMGProcessor: ObservableObject {
     private var usedMagicMessages = Set<String>()
 
     // Progressive messages shown if an operation takes too long.
-    private let magicMessageInterval: UInt64 = 4_000_000_000
+    private let magicMessageInterval: UInt64 = 3_000_000_000
     private let magicMessages = [
         "🪄 Invoking ancient hamster magic...",
         "Opening a high capacity portal 🎩...",
@@ -2983,7 +2992,7 @@ class DMGProcessor: ObservableObject {
         let didOpenApp = await openInstalledAppIfNeeded(at: destinationPath)
 
         if currentFeedbackMode == .progressBar {
-            showProgress("Installation complete!", progress: 1.0)
+            showProgress("✨ Installation complete!", progress: 1.0)
             try? await Task.sleep(nanoseconds: 1_500_000_000)
         }
 
