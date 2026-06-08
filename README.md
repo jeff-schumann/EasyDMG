@@ -28,7 +28,7 @@ After setting EasyDMG as your default app for opening DMGs, opening any DMG will
 - **It's native**: Built with Swift for MacOS, it's quick and seamless
 - **Flexible settings**: Choose installation preferences that match your workflow
 - **Save disk space**: Move DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
-- **Cautious by default**: If EasyDMG encounters anything unusual (license agreements, multiple apps, pkg installers), it opens the DMG and lets you handle it manually. It only automates the simple, common case.
+- **Cautious by default**: Designed to make installation easy while staying safe. When ambiguity arises, if EasyDMG can handle it safely (such as retrying passwords or evaluating licenses), it does; otherwise, it gracefully falls back to manual installation.
 - **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, the rest take one click, and you can disable the prompt entirely in Settings. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 - **Automatic updates**: Built-in Sparkle integration for easy updates
 - **It's fun**: The wizard hamster updates you on his silly antics in the progress bar. See more hamster wizard on the [website](https://easydmg.app).
@@ -95,7 +95,7 @@ These are core to EasyDMG's functionality, making App Store distribution incompa
 
 ## Known Limitations
 
-EasyDMG follows a "when in doubt, go manual" philosophy. For unusual DMG configurations (license agreements, multiple apps, pkg installers), it opens the DMG for manual installation rather than risking incorrect automation.
+EasyDMG follows a user-first philosophy: make app installs easy, but when ambiguity arises, handle what we can safely and gracefully fall back to manual installation when we can't. For complex configurations that cannot be resolved, it opens the DMG rather than risking incorrect automation.
 
 Some edge cases are documented and being tested - see [EDGE_CASES.md](EDGE_CASES.md) for detailed technical documentation including resolved and outstanding issues.
 

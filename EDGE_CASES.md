@@ -92,9 +92,12 @@ Not every directory ending in `.app` is necessarily a normal launchable app bund
 
 ### 22. DMG-Level License Agreements - Rating: 5/10 - RESOLVED
 
-Some DMGs display a software license agreement that the user must accept before the volume mounts. EasyDMG should not silently bypass that gate.
+Some DMGs display a software license agreement (SLA) that the user must accept before the volume mounts. EasyDMG should not silently bypass that gate.
 
-**Current behavior**: Before mounting, EasyDMG runs a preflight that parses `hdiutil imageinfo -plist` and reads the image's `Software License Agreement` property directly, instead of text-matching the human-readable output (the old approach, which false-positived on nearly every image). The check runs through the shared timeout-bounded process runner, so a stuck `hdiutil` cannot stall processing. When the property is true, EasyDMG opens the DMG via DiskImageMounter so macOS presents its normal license flow and the user accepts before installing.
+**Current behavior**:
+- **Preflight Check**: Before mounting an unencrypted DMG, EasyDMG runs a preflight check using the shared timeout-bounded process runner to parse `hdiutil imageinfo -plist` and look for the `Software License Agreement` property. If found, it opens the DMG via `DiskImageMounter` so the OS displays the standard SLA prompt.
+- **Handling Encrypted DMGs**: Reading metadata from an encrypted DMG without a passphrase triggers a macOS SecurityAgent prompt, causing a redundant password prompt. To avoid this, preflight is skipped for encrypted DMGs; instead, the check is deferred until after the user enters the passphrase. EasyDMG then reuses the password to parse the plist metadata and redirects any licensed image to manual installation.
+- **Native Handoff**: If an encrypted DMG is mounted directly via the native `DiskImageMounter` path, macOS already presents and enforces the SLA. The extra plist check is skipped on this path to prevent overlapping prompt windows.
 
 **Remaining concern**: Detection relies on the image's SLA flag. A DMG that gates licensing by other means (e.g. a custom first-run agreement inside the app) won't be caught here, but those generally reach the same manual-fallback path through other checks.
 
@@ -116,4 +119,14 @@ Replacing an app in `/Applications` can fail mid-install due to TCC (App Managem
 
 Attempting to mount password-protected DMGs non-interactively can cause the process to hang or fail silently.
 
-**Current behavior**: EasyDMG inspects `hdiutil attach` errors. If it detects authentication, passphrase, or encryption keywords, it classifies the DMG as `.passwordProtected` and gracefully falls back to opening the DMG via DiskImageMounter so macOS can show the interactive password prompt.
+**Current behavior**:
+- **Native Handoff Priority**: EasyDMG prioritizes letting macOS's native `DiskImageMounter` handle encrypted DMGs first. This allows the system to utilize saved Keychain passphrases and native prompt flows, and avoids redundant prompts. EasyDMG monitors the system to detect when the volume mounts or the user cancels.
+- **In-App Password Prompt**: If the native flow is not used, EasyDMG prompts the user for the DMG's passphrase via an in-app secure text sheet. This dialog is hosted on a level that survives background activation.
+- **Unlimited Retries & Escapes**: Instead of aborting after a fixed number of attempts, EasyDMG allows unlimited retries. After two failures, the dialog displays a "Use macOS Password Prompt..." escape hatch button that hands the image off to `DiskImageMounter`.
+- **UI & Notification Polish**: The password window displays a steady status to avoid flickering during attempts. If the user cancels the in-app prompt or explicitly hands off to the macOS prompt, redundant manual-fallback notifications are suppressed.
+
+### 26. Transient Mount Failures - Rating: 2/10 - RESOLVED
+
+A known-good DMG can occasionally fail to mount due to transient macOS or `hdiutil` glitches rather than a corrupt image.
+
+**Current behavior**: Instead of falling back to manual installation immediately upon any mount error, EasyDMG retries generic failures up to three times with a short backoff. It logs each attempt in diagnostics. It bypasses this retry logic for password-protected/encrypted DMGs (which route to their prompt flow) and for timeout-related failures.
