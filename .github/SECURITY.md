@@ -1,4 +1,20 @@
-# Security Policy
+<h1>
+  <img
+    align="right"
+    width="150"
+    alt="Security hamster"
+    src="https://github.com/user-attachments/assets/381cca17-e1b0-44ef-8b75-d9057be9bcd5#gh-dark-mode-only"
+  />
+  <img
+    align="right"
+    width="150"
+    alt="Security hamster"
+    src="https://github.com/user-attachments/assets/5f0c850b-c834-48e6-849c-5ec130929111#gh-light-mode-only"
+  />
+<br>
+  Security Policy
+</h1>
+<br>
 
 ## Supported Versions
 
