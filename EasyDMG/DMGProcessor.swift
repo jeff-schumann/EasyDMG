@@ -1722,6 +1722,19 @@ class DMGProcessor: ObservableObject {
             return .unavailable
         }
 
+        func finishMounted(_ mountPoint: String) -> SavedPasswordMountResult {
+            diagnostic("Encrypted DMG unlocked by macOS at \(mountPoint)")
+            support(
+                event: "saved_password_mount_result",
+                details: [
+                    "dmg": dmgName,
+                    "result": "success",
+                    "volume": volumeName(from: mountPoint),
+                ]
+            )
+            return .mounted(mountPoint: mountPoint)
+        }
+
         let deadline = Date().addingTimeInterval(90)
         let earliestDismissalCheck = Date().addingTimeInterval(1.0)
         while Date() < deadline {
@@ -1731,19 +1744,19 @@ class DMGProcessor: ObservableObject {
                 timeout: 2,
                 logFailure: false
             ) {
-                diagnostic("Encrypted DMG unlocked by macOS at \(mountPoint)")
-                support(
-                    event: "saved_password_mount_result",
-                    details: [
-                        "dmg": dmgName,
-                        "result": "success",
-                        "volume": volumeName(from: mountPoint),
-                    ]
-                )
-                return .mounted(mountPoint: mountPoint)
+                return finishMounted(mountPoint)
             }
 
             if Date() >= earliestDismissalCheck && runningApp.isTerminated {
+                if let mountPoint = await existingMountPoint(
+                    forDMGPath: path,
+                    dmgName: dmgName,
+                    timeout: 2,
+                    logFailure: false
+                ) {
+                    return finishMounted(mountPoint)
+                }
+
                 diagnostic("DiskImageMounter closed without mounting \(dmgName)")
                 support(
                     event: "saved_password_mount_result",
@@ -4304,8 +4317,7 @@ class DMGProcessor: ObservableObject {
             try task.run()
             task.waitUntilExit()
 
-            if task.terminationStatus == 0 {
-            } else {
+            if task.terminationStatus != 0 {
                 let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
                 diagnostic(
