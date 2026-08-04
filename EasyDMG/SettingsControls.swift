@@ -190,28 +190,26 @@ private struct OutlinedSegmentContent: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let darkActiveFill = Color(hex: "1F140E")
-        let darkActiveStroke = SettingsPalette.sand.opacity(0.55)
+        // These pickers set a value; the tab bar navigates. Deliberately kept
+        // lighter than SettingsTabBar so the two don't read as the same tier —
+        // a tinted selection rather than a solid one, in the same colour family
+        // as the checkboxes they sit beside (navy in light, sand in dark).
+        let accent: Color = colorScheme == .dark ? SettingsPalette.sand : SettingsPalette.navy
 
-        let fill: Color = isSelected
-            ? (colorScheme == .dark ? darkActiveFill : SettingsPalette.navy)
-            : .clear
-        let stroke: Color
-        if isSelected {
-            stroke = colorScheme == .dark ? darkActiveStroke : .clear
-        } else {
-            stroke = colorScheme == .dark ? .clear : theme.border
-        }
+        let fill: Color = isSelected ? accent.opacity(colorScheme == .dark ? 0.14 : 0.10) : .clear
+        let stroke: Color = isSelected
+            ? accent.opacity(colorScheme == .dark ? 0.5 : 1.0)
+            : theme.border
 
         return configuration.label
-            .font(.system(size: 11.5, weight: .bold))
-            .foregroundStyle(isSelected ? Color.white : theme.muted)
-            .padding(.vertical, 4)
-            .padding(.horizontal, 11)
+            .font(.system(size: 11, weight: .regular))
+            .foregroundStyle(isSelected ? accent : theme.muted)
+            .padding(.vertical, 3)
+            .padding(.horizontal, 10)
             .background(fill, in: RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(stroke, lineWidth: 1.5)
+                    .strokeBorder(stroke, lineWidth: 1)
             )
             .contentShape(RoundedRectangle(cornerRadius: 6))
             .animation(.easeInOut(duration: 0.15), value: isSelected)
@@ -266,17 +264,33 @@ struct AmberOutlineButtonStyle: ButtonStyle {
 // MARK: - Neutral Outline Button (Check for Updates)
 
 struct NeutralOutlineButtonStyle: ButtonStyle {
+    /// `standard` for section-level actions. `compact` for a sub-action attached
+    /// to another control, which shouldn't outweigh the control it modifies.
+    enum Size {
+        case standard
+        case compact
+    }
+
     let theme: SettingsTheme
+    var size: Size = .standard
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
+        // Scaled to sit alongside InlineSegmentedPicker without overpowering it,
+        // one notch up since these are actions rather than values. The surface
+        // fill is what separates the two: picker segments are outline-only, so
+        // an unfilled button here would read as another segment.
+        let isCompact = size == .compact
+        let radius: CGFloat = isCompact ? 5 : 6
+
+        return configuration.label
+            .font(.system(size: isCompact ? 11 : 11.5, weight: isCompact ? .regular : .medium))
             .foregroundStyle(theme.text)
-            .padding(.vertical, 5)
-            .padding(.horizontal, 12)
+            .padding(.vertical, isCompact ? 2 : 4)
+            .padding(.horizontal, isCompact ? 8 : 11)
+            .background(theme.surface, in: RoundedRectangle(cornerRadius: radius))
             .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(theme.border, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: radius)
+                    .strokeBorder(theme.border, lineWidth: 1)
             )
             .opacity(configuration.isPressed ? 0.8 : 1)
     }

@@ -597,8 +597,8 @@ private struct InstallLocationSection: View {
 
                 if preferences.installLocation == .custom {
                     Button("Choose…") { chooseCustomFolder() }
-                        .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
-                        .padding(.leading, 2)
+                        .buttonStyle(NeutralOutlineButtonStyle(theme: theme, size: .compact))
+                        .padding(.leading, 6)
                 }
             }
             .padding(.top, 1)
@@ -617,7 +617,7 @@ private struct InstallLocationSection: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     if canOfferUserFolder {
-                        Button("Install just for me instead") {
+                        Button("Switch to Personal") {
                             selectLocation(.userApplications)
                         }
                         .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
@@ -892,8 +892,8 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
     var shortName: String {
         switch self {
         case .system:           return "System"
-        case .userApplications: return "Just me"
-        case .custom:           return "Custom…"
+        case .userApplications: return "Personal"
+        case .custom:           return "Custom"
         }
     }
 
