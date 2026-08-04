@@ -16,9 +16,9 @@ If the DMG contains installers, packages, license gates, multiple plausible apps
 
 Some users may have unusual `/Applications` setups, such as a symlink, network mount, external drive, or permission-limited location.
 
-**Current behavior**: EasyDMG validates that `/Applications` exists, is a directory, and is writable before installing. This prevents silent failures for the most obvious bad states.
+**Current behavior**: The install destination is a preference — System (`/Applications`), Just me (`~/Applications`), or a custom folder — defaulting to System. EasyDMG validates the chosen folder exists, is a directory, and is writable before installing. When it isn't writable, EasyDMG offers `~/Applications` for that install (optionally as the new default) rather than silently relocating the app. This covers standard (non-admin) accounts on managed or shared Macs, which can never write to `/Applications`.
 
-**Remaining concern**: Network-mounted or external `/Applications` folders may still behave oddly. This is uncommon, but EasyDMG could choose to fall back when `/Applications` is not on a local volume.
+**Remaining concern**: Network-mounted or external install folders may still behave oddly. This is uncommon, but EasyDMG could choose to fall back when the destination is not on a local volume. Apps that genuinely require `/Applications` (system extensions, launch daemons, privileged helpers) install fine into a user folder but may misbehave at runtime; EasyDMG does not detect this.
 
 **Implementation difficulty**: 3/10.
 
