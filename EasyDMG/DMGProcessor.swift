@@ -566,6 +566,7 @@ class DMGProcessor: ObservableObject {
         case licenseRequired = "license_required"
         case securityAssessmentUnverified = "security_assessment_unverified"
         case securityAssessmentBlocked = "security_assessment_blocked"
+        case installLocationDeclined = "install_location_declined"
 
         func notificationTitle(appName: String) -> String {
             switch self {
@@ -590,6 +591,8 @@ class DMGProcessor: ObservableObject {
             case .licenseRequired:
                 return "\(appName) has a license to accept"
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
+                return "EasyDMG needs manual install"
+            case .installLocationDeclined:
                 return "EasyDMG needs manual install"
             }
         }
@@ -617,6 +620,10 @@ class DMGProcessor: ObservableObject {
                 return "Review and accept the agreement in the window to continue."
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
+                return nil
+            case .installLocationDeclined:
+                // The user just dismissed a dialog about this, so the notification would
+                // be redundant — the opened window is the answer.
                 return nil
             }
         }
@@ -2571,22 +2578,39 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Can't install to \(preferred.abbreviatedPath)"
+            // Title names the folder, not the path — a wrapped path makes a poor
+            // headline, and the exact location is spelled out in the body below.
+            alert.messageText = "Can't install to \(preferred.lastPathComponent)"
             alert.informativeText = """
-            Your account doesn't have permission to write to \(preferred.abbreviatedPath). Installing there needs an administrator.
+            Your account doesn't have permission to write to \(preferred.path). Installing there needs an administrator.
 
-            EasyDMG can install \(displayName) to \(fallback.abbreviatedPath) instead, where apps are available only to you.
+            EasyDMG can install \(displayName) to \(fallback.path) instead, where apps are available only to you.
             """
 
+            // The button and checkbox keep the ~ shorthand: a full path doesn't fit
+            // either control, and the body text above has already spelled it out.
             let checkbox = NSButton(
-                checkboxWithTitle: "Always install here",
+                checkboxWithTitle: "Always install to \(fallback.abbreviatedPath)",
                 target: nil,
                 action: nil
             )
             checkbox.state = .off
             checkbox.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
             checkbox.sizeToFit()
-            alert.accessoryView = checkbox
+
+            // NSAlert's text column is ~260pt, which wraps these paths into a ragged
+            // stack of short lines. An alert grows to fit its accessory view, so a
+            // wider container widens the whole dialog — the usual AppKit lever for
+            // this, and the layout stays a standard alert.
+            //
+            // That accessory is centred on the wider alert, so it starts further left
+            // than the message text above it. The inset pulls the checkbox back into
+            // the text column so the two share a left edge.
+            let checkboxLeadingInset: CGFloat = 8
+            let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: checkbox.frame.height))
+            checkbox.setFrameOrigin(NSPoint(x: checkboxLeadingInset, y: 0))
+            accessory.addSubview(checkbox)
+            alert.accessoryView = accessory
 
             alert.addButton(withTitle: "Install to \(fallback.abbreviatedPath)")
             alert.addButton(withTitle: "Cancel")
@@ -2798,13 +2822,17 @@ class DMGProcessor: ObservableObject {
             return
 
         case .canceled:
+            // Declining the fallback folder isn't the same as wanting nothing — the
+            // app is still wanted, just somewhere EasyDMG can't write. Leave the
+            // volume open so it can be dragged by hand, like every other case we
+            // can't finish ourselves. Unmounting here would take away the only
+            // remaining way to install.
             diagnostic("Installation canceled at install-location prompt for \(resolvedAppName)")
-            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
-            ProgressWindowController.shared.hide()
-            recordCompletion(
+            await openForManualInstallation(
+                mountPoint: mountPoint,
                 dmgName: dmgName,
-                outcome: "canceled",
-                details: ["app": resolvedAppName, "reason": "install_location_declined"]
+                reason: .installLocationDeclined,
+                appName: resolvedAppName
             )
             return
         }

@@ -554,15 +554,7 @@ private struct InstallLocationSection: View {
 
     private var isWritable: Bool {
         _ = refreshToken
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
-            // ~/Applications is created on demand at install time, so a missing
-            // folder there isn't a problem worth warning about.
-            return directory == preferences.userApplicationsDirectory
-        }
-
-        return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: directory.path)
+        return InstallLocation.isWritable(directory)
     }
 
     private var canOfferUserFolder: Bool {
@@ -588,7 +580,10 @@ private struct InstallLocationSection: View {
                     .font(.system(size: 11))
                     .foregroundStyle(theme.subtle)
 
-                Text(directory.abbreviatedPath)
+                // Full path rather than the ~ shorthand: the point of this readout is
+                // that someone can go find their installed apps, and Finder never
+                // shows a tilde — it shows the account name.
+                Text(directory.path)
                     .font(.system(size: 11.5, design: .monospaced))
                     .foregroundStyle(theme.subtle)
                     .lineLimit(1)
@@ -610,7 +605,7 @@ private struct InstallLocationSection: View {
 
             if !isWritable {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("⚠️ \(directory.abbreviatedPath) isn't writable by your account, so installs there will fail. This usually means the account isn't an administrator.")
+                    Text("⚠️ \(directory.path) isn't writable by your account, so installs there will fail. This usually means the account isn't an administrator.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(SettingsPalette.warningText)
                         .lineSpacing(3)
@@ -891,7 +886,7 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
 
     var shortName: String {
         switch self {
-        case .system:           return "System"
+        case .system:           return "Applications"
         case .userApplications: return "Personal"
         case .custom:           return "Custom"
         }
@@ -900,9 +895,12 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
     var explanation: String {
         switch self {
         case .system:
-            return "Apps are available to everyone who uses this Mac. Needs an administrator account."
+            // Deliberately says nothing about administrator accounts. Most people
+            // have the rights already, and raising the requirement here reads as a
+            // hurdle. `isWritable` surfaces the warning only when it actually bites.
+            return "The usual place for Mac apps. Installs to your Applications folder, available to everyone who uses this Mac."
         case .userApplications:
-            return "Apps are installed in your home folder and available only to you. No administrator needed."
+            return "Installs to an Applications folder inside your home folder, available only to you. Useful on a shared, work, or school Mac."
         case .custom:
             return "Apps are installed in a folder you pick."
         }
@@ -915,6 +913,32 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
         case .userApplications: return Self.userDirectory
         case .custom:           return nil
         }
+    }
+
+    /// Whether this account can place a new app in `directory`.
+    ///
+    /// This is the only signal that reliably predicts an install failure. Admin
+    /// group membership and MDM enrollment both mislabel common setups: managed
+    /// Macs often grant admin, and plenty of unmanaged Macs have a standard
+    /// second account that can't write to /Applications.
+    ///
+    /// Answers first-install only — replacing an app that is already installed is
+    /// gated separately by App Management (TCC), preflighted in DMGProcessor.
+    static func isWritable(_ directory: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
+            // ~/Applications is created on demand at install time, so a missing
+            // folder there isn't a problem worth warning about.
+            return directory == userDirectory
+        }
+
+        return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: directory.path)
+    }
+
+    /// The location that will actually work on this Mac. Drives both the first-run
+    /// default and the "Recommended" marker in Settings.
+    static var recommendedForThisMac: InstallLocation {
+        isWritable(systemDirectory) ? .system : .userApplications
     }
 }
 
@@ -990,8 +1014,23 @@ class UserPreferences: ObservableObject {
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
 
-        let savedLocation = UserDefaults.standard.string(forKey: "installLocation") ?? InstallLocation.system.rawValue
-        self.installLocation = InstallLocation(rawValue: savedLocation) ?? .system
+        if let savedLocation = UserDefaults.standard.string(forKey: "installLocation"),
+           let location = InstallLocation(rawValue: savedLocation) {
+            self.installLocation = location
+        } else {
+            // First run only: resolve the default against what this account can
+            // actually write to, so a standard (non-admin) account doesn't have to
+            // fail an install before discovering the setting.
+            //
+            // Resolved once and persisted rather than re-derived each launch — a
+            // default that tracked live permissions could quietly move where apps
+            // land between installs. `didSet` doesn't fire during init, so the
+            // write is explicit.
+            let resolved = InstallLocation.recommendedForThisMac
+            self.installLocation = resolved
+            UserDefaults.standard.set(resolved.rawValue, forKey: "installLocation")
+        }
+
         self.customInstallPath = UserDefaults.standard.string(forKey: "customInstallPath") ?? ""
     }
 }
