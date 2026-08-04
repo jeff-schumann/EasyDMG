@@ -2472,13 +2472,17 @@ class DMGProcessor: ObservableObject {
         return freeSpace > (requiredBytes + bufferSize)
     }
 
-    private func validateInstallDirectory(_ directory: URL) -> InstallFolderIssue? {
+    private func validateInstallDirectory(
+        _ directory: URL,
+        createUserApplicationsIfMissing: Bool = true
+    ) -> InstallFolderIssue? {
         var isDirectory: ObjCBool = false
 
         guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
             // ~/Applications doesn't exist on a fresh account until something creates
             // it, so create it on demand rather than reporting it as a broken setting.
-            guard directory == UserPreferences.shared.userApplicationsDirectory else {
+            guard directory == UserPreferences.shared.userApplicationsDirectory,
+                  createUserApplicationsIfMissing else {
                 return .missing
             }
 
@@ -2516,6 +2520,17 @@ class DMGProcessor: ObservableObject {
         directory.standardizedFileURL.path == InstallLocation.systemDirectory.path
     }
 
+    private func resolvedInstallLocation(for directory: URL) -> InstallLocation {
+        let path = directory.standardizedFileURL.path
+        if path == InstallLocation.systemDirectory.standardizedFileURL.path {
+            return .system
+        }
+        if path == UserPreferences.shared.userApplicationsDirectory.standardizedFileURL.path {
+            return .userApplications
+        }
+        return .custom
+    }
+
     /// Picks the folder this install should target. When the chosen folder isn't
     /// writable we offer ~/Applications instead of silently relocating the app — a
     /// standard (non-admin) account can never write to /Applications, and quietly
@@ -2531,9 +2546,13 @@ class DMGProcessor: ObservableObject {
         diagnostic("Install folder validation failed: \(message)")
 
         let fallback = UserPreferences.shared.userApplicationsDirectory
+        let fallbackIssue = validateInstallDirectory(
+            fallback,
+            createUserApplicationsIfMissing: false
+        )
         let canOfferFallback = issue == .notWritable
             && preferred.standardizedFileURL.path != fallback.standardizedFileURL.path
-            && validateInstallDirectory(fallback) == nil
+            && (fallbackIssue == nil || fallbackIssue == .missing)
 
         support(
             event: "install_folder_issue",
@@ -2565,7 +2584,17 @@ class DMGProcessor: ObservableObject {
             ]
         )
 
-        return accepted ? .resolved(fallback) : .canceled
+        guard accepted else {
+            return .canceled
+        }
+
+        if let fallbackIssue = validateInstallDirectory(fallback) {
+            let fallbackMessage = fallbackIssue.message(for: fallback)
+            diagnostic("Fallback install folder validation failed: \(fallbackMessage)")
+            return .failed(reason: fallbackIssue.rawValue, message: fallbackMessage)
+        }
+
+        return .resolved(fallback)
     }
 
     private func showInstallLocationFallbackDialog(
@@ -3107,7 +3136,7 @@ class DMGProcessor: ObservableObject {
                     "app": resolvedAppName,
                     "destination_exists": boolString(destinationExists),
                     "dmg": dmgName,
-                    "location": UserPreferences.shared.installLocation.rawValue,
+                    "location": resolvedInstallLocation(for: installDirectory).rawValue,
                     "replace_existing": boolString(shouldReplaceExistingApp),
                     "result": "success"
                 ]
