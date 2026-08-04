@@ -914,21 +914,29 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private enum ApplicationsFolderIssue: String {
+    private enum InstallFolderIssue: String {
         case missing = "applications_missing"
         case notDirectory = "applications_not_directory"
         case notWritable = "applications_not_writable"
 
-        var message: String {
+        func message(for directory: URL) -> String {
+            let display = directory.abbreviatedPath
             switch self {
             case .missing:
-                return "/Applications folder does not exist"
+                return "\(display) does not exist"
             case .notDirectory:
-                return "/Applications is not a directory"
+                return "\(display) is not a folder"
             case .notWritable:
-                return "/Applications folder is not writable"
+                return "\(display) is not writable"
             }
         }
+    }
+
+    /// Outcome of picking where an install should land.
+    private enum InstallDirectoryResolution {
+        case resolved(URL)
+        case failed(reason: String, message: String)
+        case canceled
     }
 
     private enum AppBundleValidationIssue: String {
@@ -2447,9 +2455,8 @@ class DMGProcessor: ObservableObject {
         return totalSize
     }
 
-    private func hasEnoughDiskSpace(requiredBytes: UInt64) -> Bool {
-        let appFolderPath = "/Applications"
-        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: appFolderPath),
+    private func hasEnoughDiskSpace(requiredBytes: UInt64, in directory: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: directory.path),
               let freeSpace = attrs[.systemFreeSize] as? UInt64 else {
             return true
         }
@@ -2458,29 +2465,150 @@ class DMGProcessor: ObservableObject {
         return freeSpace > (requiredBytes + bufferSize)
     }
 
-    private func validateApplicationsFolder() -> ApplicationsFolderIssue? {
-        let appFolder = "/Applications"
+    private func validateInstallDirectory(_ directory: URL) -> InstallFolderIssue? {
+        var isDirectory: ObjCBool = false
 
-        guard FileManager.default.fileExists(atPath: appFolder) else {
-            return .missing
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
+            // ~/Applications doesn't exist on a fresh account until something creates
+            // it, so create it on demand rather than reporting it as a broken setting.
+            guard directory == UserPreferences.shared.userApplicationsDirectory else {
+                return .missing
+            }
+
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                diagnostic("Created install folder \(directory.path)")
+                return nil
+            } catch {
+                diagnostic("Failed to create install folder \(directory.path): \(error)")
+                return .missing
+            }
         }
 
-        var isDirectory: ObjCBool = false
-        FileManager.default.fileExists(atPath: appFolder, isDirectory: &isDirectory)
         guard isDirectory.boolValue else {
             return .notDirectory
         }
 
-        guard FileManager.default.isWritableFile(atPath: appFolder) else {
+        guard FileManager.default.isWritableFile(atPath: directory.path) else {
             return .notWritable
         }
 
         return nil
     }
 
-    private func stagedAppURL(for appName: String) -> URL {
+    /// Staging sits inside the destination folder so the final step is a same-volume
+    /// move rather than a second full copy.
+    private func stagedAppURL(for appName: String, in directory: URL) -> URL {
         let stagedName = ".easydmg-\(UUID().uuidString)-\(appName)"
-        return URL(fileURLWithPath: "/Applications").appendingPathComponent(stagedName)
+        return directory.appendingPathComponent(stagedName)
+    }
+
+    /// TCC's App Management gate only gets in the way for apps in /Applications.
+    /// Replacing a bundle in a user-owned folder needs no special permission.
+    private func requiresAppManagementPermission(for directory: URL) -> Bool {
+        directory.standardizedFileURL.path == InstallLocation.systemDirectory.path
+    }
+
+    /// Picks the folder this install should target. When the chosen folder isn't
+    /// writable we offer ~/Applications instead of silently relocating the app — a
+    /// standard (non-admin) account can never write to /Applications, and quietly
+    /// moving the destination hides that from the user.
+    private func resolveInstallDirectory(appName: String, dmgName: String) async -> InstallDirectoryResolution {
+        let preferred = UserPreferences.shared.installDirectory
+
+        guard let issue = validateInstallDirectory(preferred) else {
+            return .resolved(preferred)
+        }
+
+        let message = issue.message(for: preferred)
+        diagnostic("Install folder validation failed: \(message)")
+
+        let fallback = UserPreferences.shared.userApplicationsDirectory
+        let canOfferFallback = issue == .notWritable
+            && preferred.standardizedFileURL.path != fallback.standardizedFileURL.path
+            && validateInstallDirectory(fallback) == nil
+
+        support(
+            event: "install_folder_issue",
+            details: [
+                "app": appName,
+                "dmg": dmgName,
+                "location": UserPreferences.shared.installLocation.rawValue,
+                "offered_fallback": boolString(canOfferFallback),
+                "reason": issue.rawValue
+            ]
+        )
+
+        guard canOfferFallback else {
+            return .failed(reason: issue.rawValue, message: message)
+        }
+
+        let accepted = await showInstallLocationFallbackDialog(
+            appName: appName,
+            preferred: preferred,
+            fallback: fallback
+        )
+
+        support(
+            event: "install_folder_fallback",
+            details: [
+                "action": accepted ? "use_fallback" : "cancel",
+                "app": appName,
+                "dmg": dmgName
+            ]
+        )
+
+        return accepted ? .resolved(fallback) : .canceled
+    }
+
+    private func showInstallLocationFallbackDialog(
+        appName: String,
+        preferred: URL,
+        fallback: URL
+    ) async -> Bool {
+        let displayName = appName.strippingAppSuffix
+
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Can't install to \(preferred.abbreviatedPath)"
+            alert.informativeText = """
+            Your account doesn't have permission to write to \(preferred.abbreviatedPath). Installing there needs an administrator.
+
+            EasyDMG can install \(displayName) to \(fallback.abbreviatedPath) instead, where apps are available only to you.
+            """
+
+            let checkbox = NSButton(
+                checkboxWithTitle: "Always install here",
+                target: nil,
+                action: nil
+            )
+            checkbox.state = .off
+            checkbox.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+            checkbox.sizeToFit()
+            alert.accessoryView = checkbox
+
+            alert.addButton(withTitle: "Install to \(fallback.abbreviatedPath)")
+            alert.addButton(withTitle: "Cancel")
+
+            presentHostedAlert(alert) { response in
+                let accepted = response == .alertFirstButtonReturn
+
+                if accepted, checkbox.state == .on {
+                    UserPreferences.shared.installLocation = .userApplications
+                    self.support(
+                        event: "preference_change",
+                        details: [
+                            "preference": "installLocation",
+                            "source": "install_fallback_dialog",
+                            "value": InstallLocation.userApplications.rawValue
+                        ]
+                    )
+                }
+
+                continuation.resume(returning: accepted)
+            }
+        }
     }
 
     private func cleanupStagedAppIfNeeded(at url: URL) {
@@ -2643,31 +2771,47 @@ class DMGProcessor: ObservableObject {
 
     private func installApp(from appPath: String, mountPoint: String, dmgPath: String, dmgName: String) async {
         let resolvedAppName = appName(from: appPath)
-        let destinationURL = URL(fileURLWithPath: "/Applications/\(resolvedAppName)")
-        let destinationPath = destinationURL.path
-        let stagedURL = stagedAppURL(for: resolvedAppName)
         var shouldReplaceExistingApp = false
 
-        if let issue = validateApplicationsFolder() {
-            diagnostic("Applications folder validation failed: \(issue.message)")
+        let installDirectory: URL
+        switch await resolveInstallDirectory(appName: resolvedAppName, dmgName: dmgName) {
+        case .resolved(let directory):
+            installDirectory = directory
+
+        case .failed(let reason, let message):
             support(
                 event: "install_result",
                 details: [
                     "app": resolvedAppName,
                     "dmg": dmgName,
-                    "reason": issue.rawValue,
+                    "reason": reason,
                     "result": "failed"
                 ]
             )
             recordCompletion(
                 dmgName: dmgName,
                 outcome: "error",
-                details: ["app": resolvedAppName, "reason": issue.rawValue]
+                details: ["app": resolvedAppName, "reason": reason]
             )
-            await handleError(issue.message)
+            await handleError(message)
             _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
             return
+
+        case .canceled:
+            diagnostic("Installation canceled at install-location prompt for \(resolvedAppName)")
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+            ProgressWindowController.shared.hide()
+            recordCompletion(
+                dmgName: dmgName,
+                outcome: "canceled",
+                details: ["app": resolvedAppName, "reason": "install_location_declined"]
+            )
+            return
         }
+
+        let destinationURL = installDirectory.appendingPathComponent(resolvedAppName)
+        let destinationPath = destinationURL.path
+        let stagedURL = stagedAppURL(for: resolvedAppName, in: installDirectory)
 
         if FileManager.default.fileExists(atPath: destinationPath) {
             diagnostic("Destination app already exists: \(destinationPath)")
@@ -2696,7 +2840,8 @@ class DMGProcessor: ObservableObject {
                 shouldReplace = await showSkipReplaceDialog(
                     appName: resolvedAppName,
                     installedVersion: installedVersion,
-                    newVersion: newVersion
+                    newVersion: newVersion,
+                    installDirectory: installDirectory
                 )
             }
 
@@ -2784,7 +2929,7 @@ class DMGProcessor: ObservableObject {
         // Pre-flight App Management TCC check before modifying an existing app bundle —
         // without this permission, replacing an app in /Applications fails mid-install and
         // the user just sees a generic "install failed". Probe non-destructively first.
-        if shouldReplaceExistingApp {
+        if shouldReplaceExistingApp && requiresAppManagementPermission(for: installDirectory) {
             let modificationPreflight = await ensureAppManagementPermission(
                 forExistingAppAt: destinationPath,
                 appName: resolvedAppName,
@@ -2822,7 +2967,7 @@ class DMGProcessor: ObservableObject {
 
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
-        if !hasEnoughDiskSpace(requiredBytes: appSize) {
+        if !hasEnoughDiskSpace(requiredBytes: appSize, in: installDirectory) {
             let sizeInGB = Double(appSize) / (1024 * 1024 * 1024)
             diagnostic("Insufficient disk space for app size \(appSize)")
             support(
@@ -2858,7 +3003,7 @@ class DMGProcessor: ObservableObject {
 
         do {
             try await withMagicFallback(
-                message: "Installing to Applications...",
+                message: "Installing to \(installDirectory.lastPathComponent)...",
                 progress: 0.2
             ) {
                 try FileManager.default.copyItem(atPath: appPath, toPath: stagedURL.path)
@@ -2934,6 +3079,7 @@ class DMGProcessor: ObservableObject {
                     "app": resolvedAppName,
                     "destination_exists": boolString(destinationExists),
                     "dmg": dmgName,
+                    "location": UserPreferences.shared.installLocation.rawValue,
                     "replace_existing": boolString(shouldReplaceExistingApp),
                     "result": "success"
                 ]
@@ -2945,7 +3091,10 @@ class DMGProcessor: ObservableObject {
         } catch {
             diagnostic("Installation failed while copying/replacing: \(error)")
             cleanupStagedAppIfNeeded(at: stagedURL)
+            // Outside /Applications a permission error isn't App Management, so don't
+            // send the user to a Privacy setting that wouldn't change anything.
             let permissionDenied = isAppManagementError(error)
+                && requiresAppManagementPermission(for: installDirectory)
             let targetProbe = permissionDenied ? canModifyExistingApp(at: destinationPath) : nil
             let failureReason = targetProbe?.target.automaticReplacementBlockReason
                 ?? (permissionDenied ? "app_management_denied" : "copy_or_replace_failed")
@@ -3024,9 +3173,11 @@ class DMGProcessor: ObservableObject {
     private func showSkipReplaceDialog(
         appName: String,
         installedVersion: String?,
-        newVersion: String?
+        newVersion: String?,
+        installDirectory: URL
     ) async -> Bool {
         let displayName = appName.strippingAppSuffix
+        let locationDescription = installDirectory.abbreviatedPath
         let informative: String
         let comparison = replacementVersionComparison(
             installedVersion: installedVersion,
@@ -3049,7 +3200,7 @@ class DMGProcessor: ObservableObject {
             }
 
             informative = [
-                "\(displayName) is already installed in Applications.",
+                "\(displayName) is already installed in \(locationDescription).",
                 "",
                 "Installed: \(installedDisplayVersion)",
                 "New: \(newDisplayVersion)",
@@ -3057,7 +3208,7 @@ class DMGProcessor: ObservableObject {
                 comparisonText
             ].joined(separator: "\n")
         } else {
-            informative = "\(displayName) is already installed in Applications."
+            informative = "\(displayName) is already installed in \(locationDescription)."
         }
 
         return await withCheckedContinuation { continuation in
@@ -4405,7 +4556,8 @@ class DMGProcessor: ObservableObject {
     }
 
     private func revealInFinder(path: String) {
-        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "/Applications")
+        let containingFolder = (path as NSString).deletingLastPathComponent
+        NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: containingFolder)
     }
 
     private func openInstalledAppIfNeeded(at path: String) async -> Bool {

@@ -444,6 +444,9 @@ struct SettingsTabView: View {
                             .toggleStyle(SettingsCheckboxStyle(theme: theme))
                     }
 
+                    InstallLocationSection(preferences: preferences, theme: theme)
+                        .padding(.top, 4)
+
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Installation feedback:")
                             .font(.system(size: 11.5))
@@ -518,6 +521,120 @@ struct SettingsTabView: View {
                 notificationPermissions.prepareForNotificationFeedback()
             }
         }
+    }
+}
+
+private struct InstallLocationSection: View {
+    @ObservedObject var preferences: UserPreferences
+    let theme: SettingsTheme
+
+    /// Bumped when the window reactivates so writability is re-checked after the
+    /// user changes folder permissions or gains admin rights outside the app.
+    @State private var refreshToken = 0
+
+    private var directory: URL { preferences.installDirectory }
+
+    private var isWritable: Bool {
+        _ = refreshToken
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) else {
+            // ~/Applications is created on demand at install time, so a missing
+            // folder there isn't a problem worth warning about.
+            return directory == preferences.userApplicationsDirectory
+        }
+
+        return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: directory.path)
+    }
+
+    private var canOfferUserFolder: Bool {
+        preferences.installLocation != .userApplications
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Install location:")
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.muted)
+
+            InlineSegmentedPicker(
+                selection: Binding(
+                    get: { preferences.installLocation },
+                    set: { selectLocation($0) }
+                ),
+                options: Array(InstallLocation.allCases),
+                label: { $0.shortName },
+                theme: theme
+            )
+
+            HStack(spacing: 8) {
+                Text(directory.abbreviatedPath)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(theme.muted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(directory.path)
+
+                if preferences.installLocation == .custom {
+                    Button("Choose…") { chooseCustomFolder() }
+                        .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+                }
+            }
+
+            Text(preferences.installLocation.explanation)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.muted)
+                .lineSpacing(2)
+
+            if !isWritable {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("⚠️ \(directory.abbreviatedPath) isn't writable by your account, so installs there will fail. This usually means the account isn't an administrator.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(SettingsPalette.warningText)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if canOfferUserFolder {
+                        Button("Install just for me instead") {
+                            selectLocation(.userApplications)
+                        }
+                        .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshToken += 1
+        }
+    }
+
+    private func selectLocation(_ location: InstallLocation) {
+        // Picking "Custom" is meaningless without a folder, so ask for one right away.
+        if location == .custom && preferences.customInstallPath.isEmpty {
+            chooseCustomFolder()
+            return
+        }
+
+        preferences.installLocation = location
+        refreshToken += 1
+    }
+
+    private func chooseCustomFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder where EasyDMG should install apps."
+        panel.directoryURL = directory
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        preferences.customInstallPath = url.path
+        preferences.installLocation = .custom
+        refreshToken += 1
     }
 }
 
@@ -734,6 +851,58 @@ enum FeedbackMode: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+// MARK: - Install Location
+
+enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
+    case system           = "system"
+    case userApplications = "userApplications"
+    case custom           = "custom"
+
+    static let systemDirectory = URL(fileURLWithPath: "/Applications", isDirectory: true)
+
+    static var userDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications", isDirectory: true)
+    }
+
+    var id: String { rawValue }
+
+    var shortName: String {
+        switch self {
+        case .system:           return "System"
+        case .userApplications: return "Just me"
+        case .custom:           return "Custom…"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .system:
+            return "Apps are available to everyone who uses this Mac. Needs an administrator account."
+        case .userApplications:
+            return "Apps are installed in your home folder and available only to you. No administrator needed."
+        case .custom:
+            return "Apps are installed in a folder you pick."
+        }
+    }
+
+    /// Directory for the built-in locations. `custom` resolves from the stored path instead.
+    var fixedDirectory: URL? {
+        switch self {
+        case .system:           return Self.systemDirectory
+        case .userApplications: return Self.userDirectory
+        case .custom:           return nil
+        }
+    }
+}
+
+extension URL {
+    /// `/Users/me/Applications` → `~/Applications`, for display in dialogs and Settings.
+    var abbreviatedPath: String {
+        (path as NSString).abbreviatingWithTildeInPath
+    }
+}
+
 // MARK: - User Preferences
 
 class UserPreferences: ObservableObject {
@@ -765,6 +934,30 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(autoInstallNewerVersions, forKey: "autoInstallNewerVersions") }
     }
 
+    @Published var installLocation: InstallLocation {
+        didSet { UserDefaults.standard.set(installLocation.rawValue, forKey: "installLocation") }
+    }
+
+    /// Only meaningful when `installLocation == .custom`.
+    @Published var customInstallPath: String {
+        didSet { UserDefaults.standard.set(customInstallPath, forKey: "customInstallPath") }
+    }
+
+    /// Where installs should land. A `.custom` selection with no usable path falls
+    /// back to /Applications so an install never targets an empty path.
+    var installDirectory: URL {
+        if let fixed = installLocation.fixedDirectory {
+            return fixed
+        }
+
+        let trimmed = customInstallPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return InstallLocation.systemDirectory }
+
+        return URL(fileURLWithPath: (trimmed as NSString).expandingTildeInPath, isDirectory: true)
+    }
+
+    var userApplicationsDirectory: URL { InstallLocation.userDirectory }
+
     private init() {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
@@ -774,6 +967,10 @@ class UserPreferences: ObservableObject {
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
+
+        let savedLocation = UserDefaults.standard.string(forKey: "installLocation") ?? InstallLocation.system.rawValue
+        self.installLocation = InstallLocation(rawValue: savedLocation) ?? .system
+        self.customInstallPath = UserDefaults.standard.string(forKey: "customInstallPath") ?? ""
     }
 }
 
