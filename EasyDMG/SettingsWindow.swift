@@ -444,13 +444,16 @@ struct SettingsTabView: View {
                             .toggleStyle(SettingsCheckboxStyle(theme: theme))
                     }
 
-                    InstallLocationSection(preferences: preferences, theme: theme)
+                    // The two pickers are a quieter subsection of the checkbox list
+                    // above: a rule fences them off, and the labels below carry the
+                    // separation between them.
+                    Rectangle()
+                        .fill(theme.border)
+                        .frame(height: 1)
                         .padding(.top, 4)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Installation feedback:")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(theme.muted)
+                        SettingGroupLabel(title: "Installation feedback", theme: theme)
 
                         InlineSegmentedPicker(
                             selection: $preferences.feedbackMode,
@@ -468,7 +471,9 @@ struct SettingsTabView: View {
                             )
                         }
                     }
-                    .padding(.top, 4)
+
+                    InstallLocationSection(preferences: preferences, theme: theme)
+                        .padding(.top, 6)
                 }
 
                 Rectangle()
@@ -524,6 +529,19 @@ struct SettingsTabView: View {
     }
 }
 
+/// Heading for a picker-backed setting. Sits at full strength so these labels —
+/// not the readouts beneath them — are what separates one setting from the next.
+private struct SettingGroupLabel: View {
+    let title: String
+    let theme: SettingsTheme
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(theme.text)
+    }
+}
+
 private struct InstallLocationSection: View {
     @ObservedObject var preferences: UserPreferences
     let theme: SettingsTheme
@@ -553,9 +571,7 @@ private struct InstallLocationSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Install location:")
-                .font(.system(size: 11.5))
-                .foregroundStyle(theme.muted)
+            SettingGroupLabel(title: "Install location", theme: theme)
 
             InlineSegmentedPicker(
                 selection: Binding(
@@ -567,10 +583,14 @@ private struct InstallLocationSection: View {
                 theme: theme
             )
 
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.subtle)
+
                 Text(directory.abbreviatedPath)
                     .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(theme.muted)
+                    .foregroundStyle(theme.subtle)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(directory.path)
@@ -578,8 +598,10 @@ private struct InstallLocationSection: View {
                 if preferences.installLocation == .custom {
                     Button("Choose…") { chooseCustomFolder() }
                         .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+                        .padding(.leading, 2)
                 }
             }
+            .padding(.top, 1)
 
             Text(preferences.installLocation.explanation)
                 .font(.system(size: 11))

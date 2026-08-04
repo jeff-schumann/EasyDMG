@@ -75,6 +75,9 @@ struct SettingsTheme {
     let surface: Color
     let border: Color
     let text: Color
+    /// Between `text` and `muted`. For readouts that must stay legible without
+    /// competing with the labels that separate one setting from the next.
+    let subtle: Color
     let muted: Color
     let successGreen: Color
     let tabBarBackground: Color
@@ -90,6 +93,7 @@ struct SettingsTheme {
         surface:               Color(hex: "F2ECE4"),
         border:                Color(hex: "DDD4C8"),
         text:                  Color(hex: "231A12"),
+        subtle:                Color(hex: "4E4034"),
         muted:                 Color(hex: "7D6A58"),
         successGreen:          Color(hex: "2F7D32"),
         tabBarBackground:      Color(hex: "FDF8EC"),
@@ -102,6 +106,7 @@ struct SettingsTheme {
         surface:               Color(hex: "251812"),
         border:                Color(hex: "3A271C"),
         text:                  Color(hex: "F2EADD"),
+        subtle:                Color(hex: "C9B8A6"),
         muted:                 Color(hex: "A89685"),
         successGreen:          Color(hex: "9BCB6A"),
         tabBarBackground:      Color.clear,
