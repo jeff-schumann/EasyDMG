@@ -94,7 +94,7 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 550, idealWidth: 550, maxWidth: .infinity,
-               minHeight: 500, idealHeight: 500, maxHeight: .infinity)
+               minHeight: 500, idealHeight: 600, maxHeight: .infinity)
         .background(theme.background)
         .background(WindowConfigurator(backgroundColor: NSColor(theme.background)))
         .ignoresSafeArea()
@@ -379,7 +379,6 @@ struct SettingsTabView: View {
     let theme: SettingsTheme
     @StateObject private var notificationPermissions = NotificationPermissionViewModel()
     @EnvironmentObject private var viewModel: CheckForUpdatesViewModel
-    @State private var unverifiedWarningDismissed = false
 
     var body: some View {
         ScrollView {
@@ -404,14 +403,14 @@ struct SettingsTabView: View {
                             .toggleStyle(SettingsCheckboxStyle(theme: theme))
                             .onChange(of: preferences.skipUnverifiedAppWarning) { newValue in
                                 if newValue {
-                                    unverifiedWarningDismissed = false
+                                    preferences.unverifiedWarningDismissed = false
                                 }
                             }
 
-                        if preferences.skipUnverifiedAppWarning && unverifiedWarningDismissed {
+                        if preferences.skipUnverifiedAppWarning && preferences.unverifiedWarningDismissed {
                             Button {
                                 withAnimation(.easeOut(duration: 0.35)) {
-                                    unverifiedWarningDismissed = false
+                                    preferences.unverifiedWarningDismissed = false
                                 }
                             } label: {
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -425,18 +424,28 @@ struct SettingsTabView: View {
                         }
                     }
 
-                    if preferences.skipUnverifiedAppWarning && !unverifiedWarningDismissed {
-                        Text("⚠️ EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download. Click this message to hide.")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(SettingsPalette.warningText)
-                            .lineSpacing(3)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                withAnimation(.easeOut(duration: 0.35)) {
-                                    unverifiedWarningDismissed = true
-                                }
+                    if preferences.skipUnverifiedAppWarning && !preferences.unverifiedWarningDismissed {
+                        // The symbol sits in its own column so wrapped lines indent
+                        // past it instead of running back under the icon.
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(SettingsPalette.warningText)
+                                .padding(.top, 2)
+
+                            Text("EasyDMG will install apps even when macOS can't verify them. Only turn this on if you trust the apps you download. Click this message to hide.")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(SettingsPalette.warningText)
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.easeOut(duration: 0.35)) {
+                                preferences.unverifiedWarningDismissed = true
                             }
-                            .transition(.opacity)
+                        }
+                        .transition(.opacity)
                     }
 
                     if preferences.autoInstallNewerVersions {
@@ -598,26 +607,46 @@ private struct InstallLocationSection: View {
             }
             .padding(.top, 1)
 
-            Text(preferences.installLocation.explanation)
-                .font(.system(size: 11))
-                .foregroundStyle(theme.muted)
-                .lineSpacing(2)
+            // The neutral description gives way to the warning: someone who has just
+            // been told installs will fail here has no use for "apps go in a folder
+            // you pick", and dropping it keeps this group to three stacked blocks.
+            if isWritable {
+                Text(preferences.installLocation.explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.muted)
+                    .lineSpacing(2)
+            } else {
+                // A bordered callout rather than one more paragraph: this is a
+                // blocker, and the box stops it blending into the text above it.
+                // The path stays out of the sentence — it is on the row directly
+                // above, and repeating it twice in 40pt was most of the bulk.
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(SettingsPalette.warningText)
+                        .padding(.top, 1)
 
-            if !isWritable {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("⚠️ \(directory.path) isn't writable by your account, so installs there will fail. This usually means the account isn't an administrator.")
+                    Text("This folder isn't writable by your account, so installs will fail. That usually means the account isn't an administrator.")
                         .font(.system(size: 11.5))
                         .foregroundStyle(SettingsPalette.warningText)
-                        .lineSpacing(3)
+                        .lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
 
                     if canOfferUserFolder {
                         Button("Switch to Personal") {
                             selectLocation(.userApplications)
                         }
-                        .buttonStyle(NeutralOutlineButtonStyle(theme: theme))
+                        .buttonStyle(NeutralOutlineButtonStyle(theme: theme, tone: .accent))
                     }
                 }
+                .padding(10)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(theme.border, lineWidth: 1)
+                )
                 .transition(.opacity)
             }
         }
@@ -970,6 +999,14 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(skipUnverifiedAppWarning, forKey: "skipUnverifiedAppWarning") }
     }
 
+    /// Whether the standing warning under `skipUnverifiedAppWarning` has been
+    /// dismissed. Persisted so hiding it sticks — a warning that reappears every
+    /// launch isn't dismissible, it's just briefly quiet. Reset when the setting
+    /// is switched back on, so re-opting into the risk shows the caveat again.
+    @Published var unverifiedWarningDismissed: Bool {
+        didSet { UserDefaults.standard.set(unverifiedWarningDismissed, forKey: "unverifiedWarningDismissed") }
+    }
+
     @Published var feedbackMode: FeedbackMode {
         didSet { UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode") }
     }
@@ -1009,6 +1046,7 @@ class UserPreferences: ObservableObject {
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
         self.openAppAfterInstall = UserDefaults.standard.object(forKey: "openAppAfterInstall") as? Bool ?? false
         self.skipUnverifiedAppWarning = UserDefaults.standard.object(forKey: "skipUnverifiedAppWarning") as? Bool ?? false
+        self.unverifiedWarningDismissed = UserDefaults.standard.object(forKey: "unverifiedWarningDismissed") as? Bool ?? false
         self.autoInstallNewerVersions = UserDefaults.standard.object(forKey: "autoInstallNewerVersions") as? Bool ?? false
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue

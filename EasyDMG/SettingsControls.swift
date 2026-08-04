@@ -271,10 +271,31 @@ struct NeutralOutlineButtonStyle: ButtonStyle {
         case compact
     }
 
+    /// `neutral` for actions on the page background. `accent` for actions sitting
+    /// on a filled surface — the neutral fill is that same surface colour, so the
+    /// button dissolves into the panel behind it, worst in light mode.
+    enum Tone {
+        case neutral
+        case accent
+    }
+
     let theme: SettingsTheme
     var size: Size = .standard
+    var tone: Tone = .neutral
 
     func makeBody(configuration: Configuration) -> some View {
+        NeutralOutlineButtonContent(configuration: configuration, theme: theme, size: size, tone: tone)
+    }
+}
+
+private struct NeutralOutlineButtonContent: View {
+    let configuration: ButtonStyle.Configuration
+    let theme: SettingsTheme
+    let size: NeutralOutlineButtonStyle.Size
+    let tone: NeutralOutlineButtonStyle.Tone
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
         // Scaled to sit alongside InlineSegmentedPicker without overpowering it,
         // one notch up since these are actions rather than values. The surface
         // fill is what separates the two: picker segments are outline-only, so
@@ -282,15 +303,28 @@ struct NeutralOutlineButtonStyle: ButtonStyle {
         let isCompact = size == .compact
         let radius: CGFloat = isCompact ? 5 : 6
 
+        // Accent borrows the picker's selected colour (navy in light, sand in
+        // dark) and its restraint with it: the tint alone carries the emphasis,
+        // so the border stays hairline and halves in dark, where a full-strength
+        // sand outline shouts. Regular weight for the same reason.
+        let isAccent = tone == .accent
+        let accent = theme.accentOutline
+        let fill = isAccent
+            ? accent.opacity(colorScheme == .dark ? 0.14 : 0.10)
+            : theme.surface
+        let stroke = isAccent
+            ? accent.opacity(colorScheme == .dark ? 0.5 : 1.0)
+            : theme.border
+
         return configuration.label
-            .font(.system(size: isCompact ? 11 : 11.5, weight: isCompact ? .regular : .medium))
-            .foregroundStyle(theme.text)
+            .font(.system(size: isCompact ? 11 : 11.5, weight: (isCompact || isAccent) ? .regular : .medium))
+            .foregroundStyle(isAccent ? accent : theme.text)
             .padding(.vertical, isCompact ? 2 : 4)
             .padding(.horizontal, isCompact ? 8 : 11)
-            .background(theme.surface, in: RoundedRectangle(cornerRadius: radius))
+            .background(fill, in: RoundedRectangle(cornerRadius: radius))
             .overlay(
                 RoundedRectangle(cornerRadius: radius)
-                    .strokeBorder(theme.border, lineWidth: 1)
+                    .strokeBorder(stroke, lineWidth: 1)
             )
             .opacity(configuration.isPressed ? 0.8 : 1)
     }

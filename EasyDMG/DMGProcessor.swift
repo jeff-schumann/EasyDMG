@@ -3228,7 +3228,8 @@ class DMGProcessor: ObservableObject {
             }
 
             informative = [
-                "\(displayName) is already installed in \(locationDescription).",
+                "\(displayName) is already installed in",
+                "\(locationDescription).",
                 "",
                 "Installed: \(installedDisplayVersion)",
                 "New: \(newDisplayVersion)",
@@ -3236,7 +3237,10 @@ class DMGProcessor: ObservableObject {
                 comparisonText
             ].joined(separator: "\n")
         } else {
-            informative = "\(displayName) is already installed in \(locationDescription)."
+            // Break before the path rather than letting the alert's narrow text
+            // column wrap it wherever it lands — a path split mid-path ("~/" on one
+            // line, "Applications." on the next) is harder to read than a short line.
+            informative = "\(displayName) is already installed in\n\(locationDescription)."
         }
 
         return await withCheckedContinuation { continuation in
