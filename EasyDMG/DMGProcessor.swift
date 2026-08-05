@@ -567,6 +567,7 @@ class DMGProcessor: ObservableObject {
         case securityAssessmentUnverified = "security_assessment_unverified"
         case securityAssessmentBlocked = "security_assessment_blocked"
         case installLocationDeclined = "install_location_declined"
+        case installLocationUnavailable = "install_location_unavailable"
 
         func notificationTitle(appName: String) -> String {
             switch self {
@@ -592,7 +593,7 @@ class DMGProcessor: ObservableObject {
                 return "\(appName) has a license to accept"
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 return "EasyDMG needs manual install"
-            case .installLocationDeclined:
+            case .installLocationDeclined, .installLocationUnavailable:
                 return "EasyDMG needs manual install"
             }
         }
@@ -621,7 +622,7 @@ class DMGProcessor: ObservableObject {
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
                 return nil
-            case .installLocationDeclined:
+            case .installLocationDeclined, .installLocationUnavailable:
                 // The user just dismissed a dialog about this, so the notification would
                 // be redundant — the opened window is the answer.
                 return nil
@@ -943,7 +944,14 @@ class DMGProcessor: ObservableObject {
     private enum InstallDirectoryResolution {
         case resolved(URL)
         case failed(reason: String, message: String)
-        case canceled
+        case manualFallback(reason: ManualFallbackReason)
+        case canceled(reason: String)
+    }
+
+    private enum InstallLocationFallbackDecision: Equatable {
+        case cancel
+        case installOnce
+        case installAndRemember
     }
 
     private enum AppBundleValidationIssue: String {
@@ -2561,8 +2569,9 @@ class DMGProcessor: ObservableObject {
             fallback,
             createUserApplicationsIfMissing: false
         )
+        let preferredIsFallback = preferred.standardizedFileURL.path == fallback.standardizedFileURL.path
         let canOfferFallback = issue == .notWritable
-            && preferred.standardizedFileURL.path != fallback.standardizedFileURL.path
+            && !preferredIsFallback
             && (fallbackIssue == nil || fallbackIssue == .missing)
 
         support(
@@ -2576,15 +2585,41 @@ class DMGProcessor: ObservableObject {
             ]
         )
 
+        // If Personal is already selected but unusable, or if it cannot serve as
+        // the fallback for another unwritable destination, offer the mounted DMG
+        // for manual installation instead of ending on a transient error message.
+        let unavailableFallbackIssue: InstallFolderIssue?
+        if preferredIsFallback {
+            unavailableFallbackIssue = issue
+        } else if issue == .notWritable,
+                  let fallbackIssue,
+                  fallbackIssue != .missing {
+            unavailableFallbackIssue = fallbackIssue
+        } else {
+            unavailableFallbackIssue = nil
+        }
+
+        if let unavailableFallbackIssue {
+            let installManually = await showInstallLocationRecoveryDialog(
+                appName: appName,
+                directory: fallback,
+                issue: unavailableFallbackIssue
+            )
+            return installManually
+                ? .manualFallback(reason: .installLocationUnavailable)
+                : .canceled(reason: unavailableFallbackIssue.rawValue)
+        }
+
         guard canOfferFallback else {
             return .failed(reason: issue.rawValue, message: message)
         }
 
-        let accepted = await showInstallLocationFallbackDialog(
+        let decision = await showInstallLocationFallbackDialog(
             appName: appName,
             preferred: preferred,
             fallback: fallback
         )
+        let accepted = decision != .cancel
 
         support(
             event: "install_folder_fallback",
@@ -2596,13 +2631,32 @@ class DMGProcessor: ObservableObject {
         )
 
         guard accepted else {
-            return .canceled
+            return .manualFallback(reason: .installLocationDeclined)
         }
 
         if let fallbackIssue = validateInstallDirectory(fallback) {
             let fallbackMessage = fallbackIssue.message(for: fallback)
             diagnostic("Fallback install folder validation failed: \(fallbackMessage)")
-            return .failed(reason: fallbackIssue.rawValue, message: fallbackMessage)
+            let installManually = await showInstallLocationRecoveryDialog(
+                appName: appName,
+                directory: fallback,
+                issue: fallbackIssue
+            )
+            return installManually
+                ? .manualFallback(reason: .installLocationUnavailable)
+                : .canceled(reason: fallbackIssue.rawValue)
+        }
+
+        if decision == .installAndRemember {
+            UserPreferences.shared.installLocation = .userApplications
+            support(
+                event: "preference_change",
+                details: [
+                    "preference": "installLocation",
+                    "source": "install_fallback_dialog",
+                    "value": InstallLocation.userApplications.rawValue
+                ]
+            )
         }
 
         return .resolved(fallback)
@@ -2612,7 +2666,7 @@ class DMGProcessor: ObservableObject {
         appName: String,
         preferred: URL,
         fallback: URL
-    ) async -> Bool {
+    ) async -> InstallLocationFallbackDecision {
         let displayName = appName.strippingAppSuffix
 
         return await withCheckedContinuation { continuation in
@@ -2657,20 +2711,52 @@ class DMGProcessor: ObservableObject {
 
             presentHostedAlert(alert) { response in
                 let accepted = response == .alertFirstButtonReturn
-
-                if accepted, checkbox.state == .on {
-                    UserPreferences.shared.installLocation = .userApplications
-                    self.support(
-                        event: "preference_change",
-                        details: [
-                            "preference": "installLocation",
-                            "source": "install_fallback_dialog",
-                            "value": InstallLocation.userApplications.rawValue
-                        ]
-                    )
+                let decision: InstallLocationFallbackDecision
+                if !accepted {
+                    decision = .cancel
+                } else if checkbox.state == .on {
+                    decision = .installAndRemember
+                } else {
+                    decision = .installOnce
                 }
 
-                continuation.resume(returning: accepted)
+                continuation.resume(returning: decision)
+            }
+        }
+    }
+
+    private func showInstallLocationRecoveryDialog(
+        appName: String,
+        directory: URL,
+        issue: InstallFolderIssue
+    ) async -> Bool {
+        let displayName = appName.strippingAppSuffix
+        let location = directory.abbreviatedPath
+        let explanation: String
+
+        switch issue {
+        case .missing:
+            explanation = "EasyDMG couldn't create \(location), so it can't install \(displayName) there."
+        case .notWritable:
+            explanation = "Your account doesn't have permission to write to \(location), so EasyDMG can't install \(displayName) there."
+        case .notDirectory:
+            explanation = "An item named Applications already exists in your home folder, but it isn't a folder."
+        }
+
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Can't use \(location)"
+            alert.informativeText = """
+            \(explanation)
+
+            You can choose a custom install location in EasyDMG Settings, or install \(displayName) manually.
+            """
+            alert.addButton(withTitle: "Install Manually")
+            alert.addButton(withTitle: "Cancel")
+
+            presentHostedAlert(alert) { response in
+                continuation.resume(returning: response == .alertFirstButtonReturn)
             }
         }
     }
@@ -2861,19 +2947,36 @@ class DMGProcessor: ObservableObject {
             _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
             return
 
-        case .canceled:
-            // Declining the fallback folder isn't the same as wanting nothing — the
-            // app is still wanted, just somewhere EasyDMG can't write. Leave the
-            // volume open so it can be dragged by hand, like every other case we
-            // can't finish ourselves. Unmounting here would take away the only
-            // remaining way to install.
-            diagnostic("Installation canceled at install-location prompt for \(resolvedAppName)")
+        case .manualFallback(let reason):
+            // The user still wants the app, just somewhere EasyDMG cannot place it.
+            // Leave the volume open so the app can be dragged to a usable location.
+            diagnostic("Installation handed off at install-location prompt for \(resolvedAppName)")
             await openForManualInstallation(
                 mountPoint: mountPoint,
                 dmgName: dmgName,
-                reason: .installLocationDeclined,
+                reason: reason,
                 appName: resolvedAppName
             )
+            return
+
+        case .canceled(let reason):
+            diagnostic("Installation canceled after install-location recovery for \(resolvedAppName)")
+            support(
+                event: "install_decision",
+                details: [
+                    "action": "cancel",
+                    "app": resolvedAppName,
+                    "dmg": dmgName,
+                    "reason": reason
+                ]
+            )
+            recordCompletion(
+                dmgName: dmgName,
+                outcome: "canceled",
+                details: ["app": resolvedAppName, "reason": reason]
+            )
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+            ProgressWindowController.shared.hide()
             return
         }
 
