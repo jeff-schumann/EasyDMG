@@ -96,6 +96,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private let dmgProcessor = DMGProcessor()
     private var launchedWithFiles = false
     private var launchModeResolved = false
+    private var launchFallbackWorkItem: DispatchWorkItem?
+    private let fileOpenLaunchTimeout: TimeInterval = 2.0
     /// True when this run began as a direct launch (settings window). Such a session
     /// keeps its window and stays alive through DMG installs instead of quitting.
     private var isSettingsSession = false
@@ -212,66 +214,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             }
         }
 
-        // Check if launched with files by seeing if application(_:open:) was called
-        // We'll set launchedWithFiles in that method
+        // A true value conclusively means the user launched EasyDMG normally.
+        // A false or missing value can also mean a DMG is on its way, so give the
+        // file-open event a proper chance to arrive before falling back to settings.
+        let isDefaultLaunch = (
+            notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? NSNumber
+        )?.boolValue == true
 
-        // Small delay to let file opening happen first
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            self.launchModeResolved = true
+        if isDefaultLaunch {
+            resolveSettingsLaunch(reason: "default_launch")
+        } else if launchedWithFiles {
+            resolveFileOpenLaunch()
+        } else {
+            diagnostic("ℹ️ Non-default launch detected - waiting briefly for a DMG")
+            NSApp.setActivationPolicy(.accessory)
+            hideSettingsWindow()
 
-            if !self.launchedWithFiles {
-                // Launched directly - show settings window with dock icon
-                self.diagnostic("✅ Launched directly - showing settings window")
-                self.support(event: "launch_mode", details: ["mode": "direct"])
-                self.isSettingsSession = true
-                NSApp.setActivationPolicy(.regular)
-                NSApp.activate(ignoringOtherApps: true)
-
-                // Always check for updates when settings window is opened
-                self.diagnostic("✅ Checking for updates (settings window)")
-                self.updater.checkForUpdatesInBackground()
-                self.lastUpdateCheck = Date()
-            } else {
-                // Launched with DMG - stay in background
-                self.diagnostic("✅ Launched with DMG - staying in background")
-                self.support(event: "launch_mode", details: ["mode": "file_open"])
-                NSApp.setActivationPolicy(.accessory)
-                self.hideSettingsWindow()
-
-                // Only check for updates if 24+ hours have passed
-                if self.shouldCheckForUpdates() {
-                    self.diagnostic("✅ Checking for updates (24+ hours since last check)")
-                    self.isWaitingForUpdateCheck = true
-                    self.updater.checkForUpdatesInBackground()
-                    self.lastUpdateCheck = Date()
-
-                    // Give the update check time to complete before allowing quit
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        self.diagnostic("✅ Update check timeout reached, allowing quit")
-                        self.isWaitingForUpdateCheck = false
-                    }
-                } else {
-                    self.diagnostic("ℹ️ Skipping update check (checked recently)")
-                }
+            let fallback = DispatchWorkItem { [weak self] in
+                guard let self, !self.launchModeResolved else { return }
+                self.diagnostic("ℹ️ No DMG arrived before launch timeout - showing settings window")
+                self.resolveSettingsLaunch(reason: "file_open_timeout")
             }
+            launchFallbackWorkItem = fallback
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + fileOpenLaunchTimeout,
+                execute: fallback
+            )
         }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        launchedWithFiles = true
-
-        if isSettingsSession {
-            // The user opened a DMG while the settings window was up. Leave their
-            // window alone; the floating progress window covers the install.
-            diagnostic("ℹ️ DMG opened during a settings session - keeping settings window visible")
-        } else {
-            // Hide settings window if it's visible (but not progress window)
-            hideSettingsWindow()
-
-            // Stay in background mode when processing DMG
-            NSApp.setActivationPolicy(.accessory)
-        }
-
         let dmgURLs = urls.filter { url in
             if url.pathExtension.lowercased() == "dmg" {
                 return true
@@ -289,7 +261,79 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             ]
         )
 
+        guard !dmgURLs.isEmpty else {
+            diagnostic("⚠️ Open request contained no DMG files")
+            return
+        }
+
+        launchedWithFiles = true
+
+        if !launchModeResolved {
+            resolveFileOpenLaunch()
+        }
+
+        if isSettingsSession {
+            // The user opened a DMG while the settings window was up. Leave their
+            // window alone; the floating progress window covers the install.
+            diagnostic("ℹ️ DMG opened during a settings session - keeping settings window visible")
+        } else {
+            // Hide settings window if it's visible (but not progress window)
+            hideSettingsWindow()
+
+            // Stay in background mode when processing DMG
+            NSApp.setActivationPolicy(.accessory)
+        }
+
         dmgProcessor.enqueueDMGs(dmgURLs)
+    }
+
+    private func resolveSettingsLaunch(reason: String) {
+        guard !launchModeResolved else { return }
+
+        launchModeResolved = true
+        launchFallbackWorkItem?.cancel()
+        launchFallbackWorkItem = nil
+        isSettingsSession = true
+
+        diagnostic("✅ Launched directly - showing settings window")
+        support(event: "launch_mode", details: ["mode": "direct", "reason": reason])
+        NSApp.setActivationPolicy(.regular)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Always check for updates when settings window is opened
+        diagnostic("✅ Checking for updates (settings window)")
+        updater.checkForUpdatesInBackground()
+        lastUpdateCheck = Date()
+    }
+
+    private func resolveFileOpenLaunch() {
+        guard !launchModeResolved else { return }
+
+        launchModeResolved = true
+        launchFallbackWorkItem?.cancel()
+        launchFallbackWorkItem = nil
+
+        diagnostic("✅ Launched with DMG - staying in background")
+        support(event: "launch_mode", details: ["mode": "file_open"])
+        NSApp.setActivationPolicy(.accessory)
+        hideSettingsWindow()
+
+        // Only check for updates if 24+ hours have passed
+        if shouldCheckForUpdates() {
+            diagnostic("✅ Checking for updates (24+ hours since last check)")
+            isWaitingForUpdateCheck = true
+            updater.checkForUpdatesInBackground()
+            lastUpdateCheck = Date()
+
+            // Give the update check time to complete before allowing quit
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                self.diagnostic("✅ Update check timeout reached, allowing quit")
+                self.isWaitingForUpdateCheck = false
+            }
+        } else {
+            diagnostic("ℹ️ Skipping update check (checked recently)")
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -349,13 +393,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var shouldSuppressSettingsWindow: Bool {
         guard !isSettingsSession else { return false }
 
-        return launchedWithFiles || dmgProcessor.isProcessing
+        return !launchModeResolved || launchedWithFiles || dmgProcessor.isProcessing
     }
 
     /// The single settings window, identified when SwiftUI attaches its content.
     private var settingsWindow: NSWindow? {
-        NSApp.windows.first { window in
+        if let identifiedWindow = NSApp.windows.first(where: { window in
             window.identifier == .easyDMGSettingsWindow
+        }) {
+            return identifiedWindow
+        }
+
+        // SwiftUI assigns our identifier one main-loop turn after creating the
+        // window. The title lets file-open launches hide it during that brief gap.
+        return NSApp.windows.first { window in
+            window.title == "EasyDMG"
         }
     }
 
@@ -366,7 +418,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     /// Called when the DMG queue empties. Quits as usual, unless the user still has
     /// the settings window open - then the install just hands control back to them.
     private func handleQueueDrained() {
-        let settingsWindowIsOpen = settingsWindow?.isVisible == true
+        // A minimized window counts as open. Reactivation usually deminiaturizes it
+        // before we get here, but not on every route a DMG can arrive by.
+        let settingsWindowIsOpen = settingsWindow.map { $0.isVisible || $0.isMiniaturized } == true
 
         guard isSettingsSession && settingsWindowIsOpen else {
             diagnostic("✅ Processing queue complete, quitting app")
