@@ -965,8 +965,7 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
         return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: directory.path)
     }
 
-    /// The location that will actually work on this Mac. Drives both the first-run
-    /// default and the "Recommended" marker in Settings.
+    /// The location that will actually work on this Mac. Supplies the first-run default.
     static var recommendedForThisMac: InstallLocation {
         isWritable(systemDirectory) ? .system : .userApplications
     }
@@ -985,6 +984,7 @@ class UserPreferences: ObservableObject {
     static let shared = UserPreferences()
 
     private static let sparkleHasLaunchedBeforeKey = "SUHasLaunchedBefore"
+    private static let lastRunVersionKey = "lastRunVersion"
 
     @Published var autoTrashDMG: Bool {
         didSet { UserDefaults.standard.set(autoTrashDMG, forKey: "autoTrashDMG") }
@@ -1044,20 +1044,56 @@ class UserPreferences: ObservableObject {
 
     var userApplicationsDirectory: URL { InstallLocation.userDirectory }
 
-    /// Supplies the new install-location preference before Sparkle starts.
-    /// Older releases always installed into /Applications, while genuinely new
-    /// users should start with the location this account can actually write to.
-    static func prepareInstallLocationDefault() {
-        let defaults = UserDefaults.standard
+    // MARK: - Startup Migrations
 
+    /// The EasyDMG version recorded on the previous launch, or nil when no launch
+    /// has been recorded yet — a genuinely new user, or someone upgrading from a
+    /// release older than this marker.
+    ///
+    /// Only meaningful during `runStartupMigrations`, which reads it before
+    /// replacing it with the running version.
+    private(set) static var previousRunVersion: String?
+
+    private static var hasRunStartupMigrations = false
+
+    /// One-time work that must happen before anything reads preferences, and
+    /// before Sparkle starts — Sparkle marks the launch as soon as its updater runs.
+    ///
+    /// Records the running version on every launch so later releases can tell an
+    /// upgrading user from a new one. Any future default that needs that
+    /// distinction should branch on `previousRunVersion`, not on Sparkle's launch
+    /// marker: that marker is a single fuse, spent by the install-location
+    /// migration below, and reads as "has launched before" for everyone from here on.
+    static func runStartupMigrations() {
+        guard !hasRunStartupMigrations else { return }
+        hasRunStartupMigrations = true
+
+        let defaults = UserDefaults.standard
+        previousRunVersion = defaults.string(forKey: lastRunVersionKey)
+
+        _ = prepareInstallLocationDefault(defaults)
+
+        defaults.set(Bundle.main.appVersion, forKey: lastRunVersionKey)
+    }
+
+    /// Supplies the install-location preference the first time a build carrying the
+    /// setting runs. Older releases always installed into /Applications, while
+    /// genuinely new users should start with the location this account can actually
+    /// write to.
+    ///
+    /// Reads Sparkle's marker because this shipped before EasyDMG kept its own, so
+    /// `previousRunVersion` is nil for everyone on this release. Safe to retire once
+    /// no one can still be updating from a build that predates the setting.
+    private static func prepareInstallLocationDefault(_ defaults: UserDefaults) -> InstallLocation {
         if let savedLocation = defaults.string(forKey: "installLocation"),
-           InstallLocation(rawValue: savedLocation) != nil {
-            return
+           let location = InstallLocation(rawValue: savedLocation) {
+            return location
         }
 
         let hasLaunchedBefore = defaults.bool(forKey: sparkleHasLaunchedBeforeKey)
         let resolved: InstallLocation = hasLaunchedBefore ? .system : .recommendedForThisMac
         defaults.set(resolved.rawValue, forKey: "installLocation")
+        return resolved
     }
 
     private init() {
@@ -1071,22 +1107,9 @@ class UserPreferences: ObservableObject {
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
 
-        if let savedLocation = UserDefaults.standard.string(forKey: "installLocation"),
-           let location = InstallLocation(rawValue: savedLocation) {
-            self.installLocation = location
-        } else {
-            // First run only: resolve the default against what this account can
-            // actually write to, so a standard (non-admin) account doesn't have to
-            // fail an install before discovering the setting.
-            //
-            // Resolved once and persisted rather than re-derived each launch — a
-            // default that tracked live permissions could quietly move where apps
-            // land between installs. `didSet` doesn't fire during init, so the
-            // write is explicit.
-            let resolved = InstallLocation.recommendedForThisMac
-            self.installLocation = resolved
-            UserDefaults.standard.set(resolved.rawValue, forKey: "installLocation")
-        }
+        // Use the same idempotent migration path even if something initializes
+        // preferences before the app delegate runs the normal startup migrations.
+        self.installLocation = Self.prepareInstallLocationDefault(UserDefaults.standard)
 
         self.customInstallPath = UserDefaults.standard.string(forKey: "customInstallPath") ?? ""
     }

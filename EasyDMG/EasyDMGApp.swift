@@ -113,10 +113,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     let updaterViewModel: CheckForUpdatesViewModel
 
     override init() {
-        // Sparkle marks this launch as soon as its updater starts. Resolve the
-        // one-time install-location migration first so a genuinely new user is
-        // not mistaken for someone upgrading from an older EasyDMG release.
-        UserPreferences.prepareInstallLocationDefault()
+        // Sparkle marks this launch as soon as its updater starts. Run the startup
+        // migrations first so a genuinely new user is not mistaken for someone
+        // upgrading from an older EasyDMG release.
+        UserPreferences.runStartupMigrations()
 
         let presentationDelegate = SparklePresentationDelegate()
         let controller = SPUStandardUpdaterController(

@@ -940,10 +940,11 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    /// Outcome of picking where an install should land.
+    /// Outcome of picking where an install should land. There is deliberately no
+    /// failure case: an unusable folder always reaches a dialog offering a manual
+    /// install, so the user is never left with an error and an unmounted volume.
     private enum InstallDirectoryResolution {
         case resolved(URL)
-        case failed(reason: String, message: String)
         case manualFallback(reason: ManualFallbackReason)
         case canceled(reason: String)
     }
@@ -2554,6 +2555,10 @@ class DMGProcessor: ObservableObject {
     /// writable we offer ~/Applications instead of silently relocating the app — a
     /// standard (non-admin) account can never write to /Applications, and quietly
     /// moving the destination hides that from the user.
+    ///
+    /// Anything ~/Applications can't answer — a folder that's gone, one that isn't a
+    /// folder, or a Personal folder that's broken itself — goes to the recovery
+    /// dialog, which hands the mounted volume over for a manual drag.
     private func resolveInstallDirectory(appName: String, dmgName: String) async -> InstallDirectoryResolution {
         let preferred = UserPreferences.shared.installDirectory
 
@@ -2570,9 +2575,26 @@ class DMGProcessor: ObservableObject {
             createUserApplicationsIfMissing: false
         )
         let preferredIsFallback = preferred.standardizedFileURL.path == fallback.standardizedFileURL.path
-        let canOfferFallback = issue == .notWritable
-            && !preferredIsFallback
-            && (fallbackIssue == nil || fallbackIssue == .missing)
+
+        // Which folder to raise with the user when there is no automatic option
+        // left. Nil means Personal is still worth offering as a fallback below.
+        let unusable: (directory: URL, issue: InstallFolderIssue)?
+        if preferredIsFallback {
+            // Personal is the chosen location and it's broken, so there is nothing
+            // left to fall back to.
+            unusable = (fallback, issue)
+        } else if issue != .notWritable {
+            // A destination that is missing or isn't a folder is not a permissions
+            // problem — a custom folder gets deleted, renamed, or lives on a drive
+            // that isn't mounted. Offering Personal would answer a question the user
+            // didn't ask; the chosen location is what needs their attention.
+            unusable = (preferred, issue)
+        } else if let fallbackIssue, fallbackIssue != .missing {
+            // Permissions problem, but Personal can't stand in either.
+            unusable = (fallback, fallbackIssue)
+        } else {
+            unusable = nil
+        }
 
         support(
             event: "install_folder_issue",
@@ -2580,38 +2602,26 @@ class DMGProcessor: ObservableObject {
                 "app": appName,
                 "dmg": dmgName,
                 "location": UserPreferences.shared.installLocation.rawValue,
-                "offered_fallback": boolString(canOfferFallback),
-                "reason": issue.rawValue
+                "offered_fallback": boolString(unusable == nil),
+                "reason": issue.rawValue,
+                "unusable_folder": unusable?.directory.abbreviatedPath ?? "",
+                "unusable_reason": unusable?.issue.rawValue ?? ""
             ]
         )
 
-        // If Personal is already selected but unusable, or if it cannot serve as
-        // the fallback for another unwritable destination, offer the mounted DMG
-        // for manual installation instead of ending on a transient error message.
-        let unavailableFallbackIssue: InstallFolderIssue?
-        if preferredIsFallback {
-            unavailableFallbackIssue = issue
-        } else if issue == .notWritable,
-                  let fallbackIssue,
-                  fallbackIssue != .missing {
-            unavailableFallbackIssue = fallbackIssue
-        } else {
-            unavailableFallbackIssue = nil
-        }
-
-        if let unavailableFallbackIssue {
+        // Every unusable destination ends at the recovery dialog rather than an
+        // error message. The DMG is still mounted at this point, so handing it over
+        // for a manual drag keeps the install possible; failing here would unmount
+        // the volume and take the last remaining option away.
+        if let unusable {
             let installManually = await showInstallLocationRecoveryDialog(
                 appName: appName,
-                directory: fallback,
-                issue: unavailableFallbackIssue
+                directory: unusable.directory,
+                issue: unusable.issue
             )
             return installManually
                 ? .manualFallback(reason: .installLocationUnavailable)
-                : .canceled(reason: unavailableFallbackIssue.rawValue)
-        }
-
-        guard canOfferFallback else {
-            return .failed(reason: issue.rawValue, message: message)
+                : .canceled(reason: unusable.issue.rawValue)
         }
 
         let decision = await showInstallLocationFallbackDialog(
@@ -2734,13 +2744,23 @@ class DMGProcessor: ObservableObject {
         let location = directory.abbreviatedPath
         let explanation: String
 
+        // Personal is the one folder EasyDMG creates on demand. Anywhere else, a
+        // missing folder was never something we tried to make.
+        let isCreatedOnDemand = directory.standardizedFileURL.path
+            == UserPreferences.shared.userApplicationsDirectory.standardizedFileURL.path
+
         switch issue {
-        case .missing:
+        case .missing where isCreatedOnDemand:
             explanation = "EasyDMG couldn't create \(location), so it can't install \(displayName) there."
+        case .missing:
+            // "Can't find" rather than "doesn't exist": a folder on a drive that
+            // isn't plugged in is missing in exactly the same way as a deleted one,
+            // and nothing here can tell the two apart.
+            explanation = "EasyDMG can't find \(location), so it can't install \(displayName) there."
         case .notWritable:
             explanation = "Your account doesn't have permission to write to \(location), so EasyDMG can't install \(displayName) there."
         case .notDirectory:
-            explanation = "An item named Applications already exists in your home folder, but it isn't a folder."
+            explanation = "\(location) is a file, not a folder, so EasyDMG can't install \(displayName) there."
         }
 
         return await withCheckedContinuation { continuation in
@@ -2750,7 +2770,7 @@ class DMGProcessor: ObservableObject {
             alert.informativeText = """
             \(explanation)
 
-            You can choose a custom install location in EasyDMG Settings, or install \(displayName) manually.
+            You can choose a different install location in EasyDMG Settings, or install \(displayName) manually.
             """
             alert.addButton(withTitle: "Install Manually")
             alert.addButton(withTitle: "Cancel")
@@ -2927,25 +2947,6 @@ class DMGProcessor: ObservableObject {
         switch await resolveInstallDirectory(appName: resolvedAppName, dmgName: dmgName) {
         case .resolved(let directory):
             installDirectory = directory
-
-        case .failed(let reason, let message):
-            support(
-                event: "install_result",
-                details: [
-                    "app": resolvedAppName,
-                    "dmg": dmgName,
-                    "reason": reason,
-                    "result": "failed"
-                ]
-            )
-            recordCompletion(
-                dmgName: dmgName,
-                outcome: "error",
-                details: ["app": resolvedAppName, "reason": reason]
-            )
-            await handleError(message)
-            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
-            return
 
         case .manualFallback(let reason):
             // The user still wants the app, just somewhere EasyDMG cannot place it.
