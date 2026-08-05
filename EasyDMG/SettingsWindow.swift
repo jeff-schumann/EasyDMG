@@ -58,7 +58,7 @@ private struct WindowConfigurator: NSViewRepresentable {
 
 struct SettingsView: View {
     @StateObject private var preferences = UserPreferences.shared
-    @State private var selectedTab: SettingsTab = .setup
+    @AppStorage("lastSettingsTab") private var selectedTab: SettingsTab = .setup
     @Environment(\.colorScheme) private var colorScheme
 
     private var theme: SettingsTheme { SettingsTheme.resolve(for: colorScheme) }
