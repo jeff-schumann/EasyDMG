@@ -11,13 +11,17 @@ import UniformTypeIdentifiers
 import UserNotifications
 import Sparkle
 
+extension NSUserInterfaceItemIdentifier {
+    static let easyDMGSettingsWindow = NSUserInterfaceItemIdentifier("EasyDMGSettingsWindow")
+}
+
 @main
 struct EasyDMGApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
         // Settings window - shown when launched directly
-        WindowGroup("EasyDMG") {
+        Window("EasyDMG", id: "settings") {
             SettingsView()
                 .environmentObject(appDelegate.updaterViewModel)
         }
@@ -92,6 +96,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private let dmgProcessor = DMGProcessor()
     private var launchedWithFiles = false
     private var launchModeResolved = false
+    /// True when this run began as a direct launch (settings window). Such a session
+    /// keeps its window and stays alive through DMG installs instead of quitting.
+    private var isSettingsSession = false
     private let updaterController: SPUStandardUpdaterController
     // Sparkle holds delegates weakly, so EasyDMG must retain this object.
     private let updaterPresentationDelegate: SparklePresentationDelegate
@@ -177,6 +184,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationDidFinishLaunching(_ notification: Notification) {
 
+        dmgProcessor.onQueueDrained = { [weak self] in
+            guard let self else {
+                NSApp.terminate(nil)
+                return
+            }
+            self.handleQueueDrained()
+        }
+
         // Set notification delegate to show notifications even when app is active
         UNUserNotificationCenter.current().delegate = self
 
@@ -208,6 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 // Launched directly - show settings window with dock icon
                 self.diagnostic("✅ Launched directly - showing settings window")
                 self.support(event: "launch_mode", details: ["mode": "direct"])
+                self.isSettingsSession = true
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
 
@@ -244,11 +260,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func application(_ application: NSApplication, open urls: [URL]) {
         launchedWithFiles = true
 
-        // Hide settings window if it's visible (but not progress window)
-        hideSettingsWindow()
+        if isSettingsSession {
+            // The user opened a DMG while the settings window was up. Leave their
+            // window alone; the floating progress window covers the install.
+            diagnostic("ℹ️ DMG opened during a settings session - keeping settings window visible")
+        } else {
+            // Hide settings window if it's visible (but not progress window)
+            hideSettingsWindow()
 
-        // Stay in background mode when processing DMG
-        NSApp.setActivationPolicy(.accessory)
+            // Stay in background mode when processing DMG
+            NSApp.setActivationPolicy(.accessory)
+        }
 
         let dmgURLs = urls.filter { url in
             if url.pathExtension.lowercased() == "dmg" {
@@ -276,7 +298,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             return false
         }
 
-        return !launchedWithFiles && !dmgProcessor.isProcessing
+        // A settings session quits when its window closes, but never mid-install -
+        // handleQueueDrained() takes over once processing finishes.
+        return (isSettingsSession || !launchedWithFiles) && !dmgProcessor.isProcessing
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -323,19 +347,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private var shouldSuppressSettingsWindow: Bool {
-        launchedWithFiles || dmgProcessor.isProcessing
+        guard !isSettingsSession else { return false }
+
+        return launchedWithFiles || dmgProcessor.isProcessing
+    }
+
+    /// The single settings window, identified when SwiftUI attaches its content.
+    private var settingsWindow: NSWindow? {
+        NSApp.windows.first { window in
+            window.identifier == .easyDMGSettingsWindow
+        }
     }
 
     private func hideSettingsWindow() {
-        // Only hide settings windows, not the progress window
-        for window in NSApp.windows {
-            // Don't hide the progress window (it has .floating level)
-            // Don't hide transient install/permission windows either.
-            if window.level != .floating &&
-                window.identifier?.rawValue != "AppManagementPermissionWindow" {
-                window.orderOut(nil)
-            }
+        settingsWindow?.orderOut(nil)
+    }
+
+    /// Called when the DMG queue empties. Quits as usual, unless the user still has
+    /// the settings window open - then the install just hands control back to them.
+    private func handleQueueDrained() {
+        let settingsWindowIsOpen = settingsWindow?.isVisible == true
+
+        guard isSettingsSession && settingsWindowIsOpen else {
+            diagnostic("✅ Processing queue complete, quitting app")
+            support(event: "queue_complete", details: ["action": "quit"])
+            NSApp.terminate(nil)
+            return
         }
+
+        diagnostic("✅ Processing queue complete, returning to open settings window")
+        support(event: "queue_complete", details: ["action": "return_to_settings"])
+        launchedWithFiles = false
+        // Deliberately no activate() here: "open app after install" and "reveal in
+        // Finder" hand focus elsewhere, and stealing it back would be worse.
+        NSApp.setActivationPolicy(.regular)
     }
 
     // MARK: - UNUserNotificationCenterDelegate

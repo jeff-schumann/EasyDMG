@@ -955,6 +955,11 @@ class DMGProcessor: ObservableObject {
     }
 
     @Published var isProcessing = false
+
+    /// Called once the DMG queue is empty. The app delegate owns the quit decision;
+    /// when unset the processor falls back to quitting on its own.
+    var onQueueDrained: (() -> Void)?
+
     private var currentFeedbackMode: FeedbackMode = .progressBar
     private var pendingDMGURLs: [URL] = []
     private var isDrainingQueue = false
@@ -1281,8 +1286,14 @@ class DMGProcessor: ObservableObject {
         isDrainingQueue = false
         ProgressWindowController.shared.hide()
 
-        diagnostic("✅ Processing queue complete, quitting app")
-        NSApp.terminate(nil)
+        // The app delegate decides what happens next: normally quit, but stay alive
+        // when the user still has the settings window open.
+        if let onQueueDrained {
+            onQueueDrained()
+        } else {
+            diagnostic("✅ Processing queue complete, quitting app")
+            NSApp.terminate(nil)
+        }
     }
 
     // Process a DMG file (main entry point)

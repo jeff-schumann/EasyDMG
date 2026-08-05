@@ -28,6 +28,7 @@ private struct WindowConfigurator: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+            window.identifier = .easyDMGSettingsWindow
             window.isMovableByWindowBackground = true
             window.backgroundColor = backgroundColor
             repositionTrafficLights(in: window, targetX: 16)
