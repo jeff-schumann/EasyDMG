@@ -984,6 +984,8 @@ extension URL {
 class UserPreferences: ObservableObject {
     static let shared = UserPreferences()
 
+    private static let sparkleHasLaunchedBeforeKey = "SUHasLaunchedBefore"
+
     @Published var autoTrashDMG: Bool {
         didSet { UserDefaults.standard.set(autoTrashDMG, forKey: "autoTrashDMG") }
     }
@@ -1041,6 +1043,22 @@ class UserPreferences: ObservableObject {
     }
 
     var userApplicationsDirectory: URL { InstallLocation.userDirectory }
+
+    /// Supplies the new install-location preference before Sparkle starts.
+    /// Older releases always installed into /Applications, while genuinely new
+    /// users should start with the location this account can actually write to.
+    static func prepareInstallLocationDefault() {
+        let defaults = UserDefaults.standard
+
+        if let savedLocation = defaults.string(forKey: "installLocation"),
+           InstallLocation(rawValue: savedLocation) != nil {
+            return
+        }
+
+        let hasLaunchedBefore = defaults.bool(forKey: sparkleHasLaunchedBeforeKey)
+        let resolved: InstallLocation = hasLaunchedBefore ? .system : .recommendedForThisMac
+        defaults.set(resolved.rawValue, forKey: "installLocation")
+    }
 
     private init() {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
