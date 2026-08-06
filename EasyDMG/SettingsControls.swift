@@ -248,16 +248,43 @@ struct AmberOutlineButtonStyle: ButtonStyle {
     let theme: SettingsTheme
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(theme.accentOutline)
+        AmberOutlineButtonContent(configuration: configuration, theme: theme)
+    }
+}
+
+private struct AmberOutlineButtonContent: View {
+    let configuration: ButtonStyle.Configuration
+    let theme: SettingsTheme
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovering = false
+
+    var body: some View {
+        // These sit under body copy on the About tab, so they rest quietly and
+        // firm up only under the cursor: full-strength tint plus the thicker
+        // border. Sand on dark reads hotter than navy on cream, so it rests a
+        // little further back — same restraint as NeutralOutlineButtonStyle.
+        let accent = theme.accentOutline
+        let restingStroke = colorScheme == .dark ? 0.45 : 0.55
+        let strokeOpacity = isHovering ? 1.0 : restingStroke
+        let textOpacity = isHovering ? 1.0 : 0.82
+
+        // Weight stays put across states. Bolding on hover would re-measure the
+        // label and shove the neighbouring button sideways, so the emphasis
+        // comes from tint and border instead.
+        return configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(accent.opacity(textOpacity))
             .padding(.vertical, 5)
             .padding(.horizontal, 12)
+            .contentShape(RoundedRectangle(cornerRadius: 7))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(theme.accentOutline, lineWidth: 1.5)
+                    .strokeBorder(accent.opacity(strokeOpacity),
+                                  lineWidth: isHovering ? 1.5 : 1)
             )
             .opacity(configuration.isPressed ? 0.8 : 1)
+            .animation(.easeOut(duration: 0.14), value: isHovering)
+            .onHover { isHovering = $0 }
     }
 }
 

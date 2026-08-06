@@ -286,8 +286,38 @@ enum DefaultHandlerHelper {
 
 // MARK: - About Tab
 
+/// Placement of the tree fiddy easter egg. Horizontally he hangs off the right
+/// edge of the window; vertically he tracks the support button, so he arrives
+/// in the same spot beside it whatever height the user has dragged the window
+/// to. Tune `width` first — the rest follow from it.
+private enum NessieMetrics {
+    /// Rendered width of the artwork (bubble through tail tip).
+    static let width: CGFloat = 210
+    /// How far his tail pokes past the window edge when he's out.
+    static let restingX: CGFloat = 16
+    /// Far enough right that even the spring's overshoot stays out of sight.
+    static var hiddenX: CGFloat { width + 30 }
+    /// How far the top of the speech bubble clears the top of the button. The
+    /// trimmed artwork starts at the bubble, so this is measured off its top edge.
+    static let bubbleLift: CGFloat = 15
+}
+
+/// Reports where the support button has landed so the easter egg can line up
+/// with it, rather than with the bottom of a window the user can resize.
+private struct SupportButtonTopKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct AboutTabView: View {
     let theme: SettingsTheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isShowingNessie = false
+    @State private var supportButtonTop: CGFloat = 0
+
+    private static let coordinateSpace = "aboutTabContent"
 
     var body: some View {
         ScrollView {
@@ -322,6 +352,15 @@ struct AboutTabView: View {
                         NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/jeff.schumann")!)
                     }
                     .buttonStyle(AmberOutlineButtonStyle(theme: theme))
+                    .onHover { isShowingNessie = $0 }
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: SupportButtonTopKey.self,
+                                value: geo.frame(in: .named(Self.coordinateSpace)).minY
+                            )
+                        }
+                    )
                 }
                 .padding(.top, 4)
 
@@ -357,6 +396,42 @@ struct AboutTabView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
         }
+        .coordinateSpace(name: Self.coordinateSpace)
+        .onPreferenceChange(SupportButtonTopKey.self) { supportButtonTop = $0 }
+        .overlay(alignment: .topTrailing) { nessie }
+        // Keeps him genuinely invisible while parked past the window edge.
+        .clipped()
+    }
+
+    /// Easter egg: hovering the support button slides the tree fiddy monster in
+    /// from beyond the right edge of the window. Purely decorative, so he never
+    /// takes the mouse — otherwise he'd steal the hover that summoned him and
+    /// flicker in and out.
+    private var nessie: some View {
+        Image("tree-fiddy")
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: NessieMetrics.width)
+            // Vertical placement follows the button and so is never animated —
+            // only the horizontal slide is.
+            .offset(x: nessieOffsetX, y: supportButtonTop - NessieMetrics.bubbleLift)
+            .opacity(reduceMotion && !isShowingNessie ? 0 : 1)
+            .animation(nessieAnimation, value: isShowingNessie)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var nessieOffsetX: CGFloat {
+        // Reduce Motion swaps the slide for a fade, so he stays put and appears.
+        if reduceMotion { return NessieMetrics.restingX }
+        return isShowingNessie ? NessieMetrics.restingX : NessieMetrics.hiddenX
+    }
+
+    private var nessieAnimation: Animation {
+        reduceMotion
+            ? .easeInOut(duration: 0.2)
+            : .spring(response: 0.34, dampingFraction: 0.78)
     }
 
     private func showLogs() {
