@@ -381,9 +381,7 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
 
         let iconView = NSImageView()
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = Bundle.main.path(forResource: "wizardhamster", ofType: "icns")
-            .flatMap { NSImage(contentsOfFile: $0) }
-            ?? NSApp.applicationIconImage
+        iconView.image = AlertIcon.image ?? NSApp.applicationIconImage
         iconView.imageScaling = .scaleProportionallyUpOrDown
 
         let titleLabel = NSTextField(labelWithString: "EasyDMG needs permission")
@@ -2451,10 +2449,7 @@ class DMGProcessor: ObservableObject {
                     ? "Incorrect password. Enter the password to unlock this disk image."
                     : "Enter the password to unlock this disk image."
 
-                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-                   let icon = NSImage(contentsOfFile: iconPath) {
-                    alert.icon = icon
-                }
+                alert.icon = AlertIcon.image
 
                 let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
                 passwordField.placeholderString = "Password"
@@ -2732,7 +2727,7 @@ class DMGProcessor: ObservableObject {
     ) async -> InstallDirectoryResolution {
         diagnostic(
             "\(appName) ships a system extension but is headed for \(preferred.path); "
-            + "system folder usable=\(boolString(systemIsUsable))"
+            + "applications folder usable=\(boolString(systemIsUsable))"
         )
 
         support(
@@ -2814,6 +2809,7 @@ class DMGProcessor: ObservableObject {
             alert.alertStyle = .warning
             alert.messageText = "\(displayName) needs to install in \(systemFolder.lastPathComponent)"
             alert.informativeText = informative
+            alert.icon = AlertIcon.image
 
             if canInstallToSystem {
                 alert.addButton(withTitle: "Install to \(systemFolder.lastPathComponent)")
@@ -2855,6 +2851,7 @@ class DMGProcessor: ObservableObject {
 
             EasyDMG can install \(displayName) to \(fallback.path) instead, where apps are available only to you.
             """
+            alert.icon = AlertIcon.image
 
             // The button and checkbox keep the ~ shorthand: a full path doesn't fit
             // either control, and the body text above has already spelled it out.
@@ -2937,6 +2934,7 @@ class DMGProcessor: ObservableObject {
 
             You can choose a different install location in EasyDMG Settings, or install \(displayName) manually.
             """
+            alert.icon = AlertIcon.image
             alert.addButton(withTitle: "Install Manually")
             alert.addButton(withTitle: "Cancel")
 
@@ -3656,10 +3654,7 @@ class DMGProcessor: ObservableObject {
                 alert.messageText = "Replace \(displayName)?"
                 alert.informativeText = informative
 
-                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-                   let icon = NSImage(contentsOfFile: iconPath) {
-                    alert.icon = icon
-                }
+                alert.icon = AlertIcon.image
 
                 let suppressCheckbox: NSButton?
                 if comparison == .newer {
@@ -3885,10 +3880,7 @@ class DMGProcessor: ObservableObject {
                 alert.messageText = "EasyDMG"
                 alert.informativeText = "\(displayName) is currently running.\n\nQuit and install the new version?"
 
-                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-                   let icon = NSImage(contentsOfFile: iconPath) {
-                    alert.icon = icon
-                }
+                alert.icon = AlertIcon.image
 
                 alert.addButton(withTitle: "Quit & Install")
                 alert.addButton(withTitle: "Cancel")
@@ -3909,10 +3901,7 @@ class DMGProcessor: ObservableObject {
                 alert.messageText = "EasyDMG"
                 alert.informativeText = "\(displayName) didn't quit. It may have unsaved work or an open dialog.\n\nClose it manually, then try again."
 
-                if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-                   let icon = NSImage(contentsOfFile: iconPath) {
-                    alert.icon = icon
-                }
+                alert.icon = AlertIcon.image
 
                 alert.addButton(withTitle: "Try Again")
                 alert.addButton(withTitle: "Cancel")
@@ -4171,6 +4160,7 @@ class DMGProcessor: ObservableObject {
 
             To install this version, move \(appName.strippingAppSuffix) from your Applications folder to the Trash to uninstall, then open the DMG again.
             """
+            alert.icon = AlertIcon.image
             alert.addButton(withTitle: "Show in Finder")
             alert.addButton(withTitle: "Cancel")
 
@@ -4843,10 +4833,7 @@ class DMGProcessor: ObservableObject {
                 "You can turn off this warning in Settings."
             ].joined(separator: "\n")
 
-            if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-               let icon = NSImage(contentsOfFile: iconPath) {
-                alert.icon = icon
-            }
+            alert.icon = AlertIcon.image
 
             alert.addButton(withTitle: "Continue Install")
             alert.addButton(withTitle: "Open in Finder")
@@ -4873,10 +4860,7 @@ class DMGProcessor: ObservableObject {
             alert.messageText = "“\(displayName)” may not be safe"
             alert.informativeText = "macOS flagged this app as damaged or potentially unsafe. EasyDMG won't install it automatically."
 
-            if let iconPath = Bundle.main.path(forResource: "wizardhamster", ofType: "icns"),
-               let icon = NSImage(contentsOfFile: iconPath) {
-                alert.icon = icon
-            }
+            alert.icon = AlertIcon.image
 
             alert.addButton(withTitle: "Open in Finder")
             alert.addButton(withTitle: "Cancel")
