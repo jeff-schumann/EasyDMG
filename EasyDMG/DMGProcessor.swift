@@ -568,6 +568,7 @@ class DMGProcessor: ObservableObject {
         case securityAssessmentBlocked = "security_assessment_blocked"
         case installLocationDeclined = "install_location_declined"
         case installLocationUnavailable = "install_location_unavailable"
+        case requiresSystemLocation = "requires_system_location"
 
         func notificationTitle(appName: String) -> String {
             switch self {
@@ -593,7 +594,7 @@ class DMGProcessor: ObservableObject {
                 return "\(appName) has a license to accept"
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 return "EasyDMG needs manual install"
-            case .installLocationDeclined, .installLocationUnavailable:
+            case .installLocationDeclined, .installLocationUnavailable, .requiresSystemLocation:
                 return "EasyDMG needs manual install"
             }
         }
@@ -622,7 +623,7 @@ class DMGProcessor: ObservableObject {
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
                 return nil
-            case .installLocationDeclined, .installLocationUnavailable:
+            case .installLocationDeclined, .installLocationUnavailable, .requiresSystemLocation:
                 // The user just dismissed a dialog about this, so the notification would
                 // be redundant — the opened window is the answer.
                 return nil
@@ -953,6 +954,25 @@ class DMGProcessor: ObservableObject {
         case cancel
         case installOnce
         case installAndRemember
+    }
+
+    /// Bundle contents that say something about where an app can be installed.
+    ///
+    /// Only `systemExtension` is treated as certain, and it is the only one that
+    /// reaches the user: macOS refuses to activate a system extension or DriverKit
+    /// driver unless its containing app sits in /Applications, so an install anywhere
+    /// else is guaranteed broken. The other two are support breadcrumbs only: they
+    /// can explain an app's location-sensitive behavior without changing the install.
+    private enum SystemLocationMarker: String {
+        case systemExtension = "system_extension"
+        case launchDaemon = "launch_daemon"
+        case privilegedHelper = "privileged_helper"
+    }
+
+    private enum SystemLocationDecision: Equatable {
+        case installToSystem
+        case openInFinder
+        case cancel
     }
 
     private enum AppBundleValidationIssue: String {
@@ -2559,8 +2579,33 @@ class DMGProcessor: ObservableObject {
     /// Anything ~/Applications can't answer — a folder that's gone, one that isn't a
     /// folder, or a Personal folder that's broken itself — goes to the recovery
     /// dialog, which hands the mounted volume over for a manual drag.
-    private func resolveInstallDirectory(appName: String, dmgName: String) async -> InstallDirectoryResolution {
+    ///
+    /// `requiresSystemLocation` short-circuits all of that. An app that can only run
+    /// from /Applications makes the usual options wrong rather than merely worse: the
+    /// Personal fallback below would produce exactly the broken install the check
+    /// exists to prevent, so it gets its own dialog before any of this runs.
+    private func resolveInstallDirectory(
+        appName: String,
+        dmgName: String,
+        requiresSystemLocation: Bool
+    ) async -> InstallDirectoryResolution {
         let preferred = UserPreferences.shared.installDirectory
+
+        if requiresSystemLocation {
+            // Only skip the dialog when /Applications is both the destination and
+            // usable — otherwise every route from here ends somewhere the app can't run.
+            let headingForSystem = resolvedInstallLocation(for: preferred) == .system
+            let systemIsUsable = validateInstallDirectory(InstallLocation.systemDirectory) == nil
+
+            if !headingForSystem || !systemIsUsable {
+                return await resolveSystemLocationRequirement(
+                    appName: appName,
+                    dmgName: dmgName,
+                    preferred: preferred,
+                    systemIsUsable: systemIsUsable
+                )
+            }
+        }
 
         guard let issue = validateInstallDirectory(preferred) else {
             return .resolved(preferred)
@@ -2670,6 +2715,126 @@ class DMGProcessor: ObservableObject {
         }
 
         return .resolved(fallback)
+    }
+
+    /// Handles an app that can only run from /Applications when the install is
+    /// headed somewhere else, or when /Applications itself is closed to this account.
+    ///
+    /// The install is stopped either way. What differs is whether there's a fix to
+    /// offer: an account that can write to /Applications gets a one-time override,
+    /// and an account that can't gets the volume handed over, since no folder it can
+    /// write to would make the app work.
+    private func resolveSystemLocationRequirement(
+        appName: String,
+        dmgName: String,
+        preferred: URL,
+        systemIsUsable: Bool
+    ) async -> InstallDirectoryResolution {
+        diagnostic(
+            "\(appName) ships a system extension but is headed for \(preferred.path); "
+            + "system folder usable=\(boolString(systemIsUsable))"
+        )
+
+        support(
+            event: "install_requires_system_location",
+            details: [
+                "app": appName,
+                "dmg": dmgName,
+                "destination": preferred.abbreviatedPath,
+                "location": UserPreferences.shared.installLocation.rawValue,
+                "system_usable": boolString(systemIsUsable)
+            ]
+        )
+
+        let decision = await showSystemLocationRequiredDialog(
+            appName: appName,
+            preferred: preferred,
+            canInstallToSystem: systemIsUsable
+        )
+
+        support(
+            event: "install_requires_system_location_decision",
+            details: [
+                "action": {
+                    switch decision {
+                    case .installToSystem: return "install_to_system"
+                    case .openInFinder: return "open_in_finder"
+                    case .cancel: return "cancel"
+                    }
+                }(),
+                "app": appName,
+                "dmg": dmgName
+            ]
+        )
+
+        switch decision {
+        case .installToSystem:
+            // A one-time override. The preference stays put: the user picked their
+            // install location on purpose, and one unusual app is a poor reason to
+            // silently move every future install.
+            return .resolved(InstallLocation.systemDirectory)
+        case .openInFinder:
+            return .manualFallback(reason: .requiresSystemLocation)
+        case .cancel:
+            return .canceled(reason: ManualFallbackReason.requiresSystemLocation.rawValue)
+        }
+    }
+
+    private func showSystemLocationRequiredDialog(
+        appName: String,
+        preferred: URL,
+        canInstallToSystem: Bool
+    ) async -> SystemLocationDecision {
+        let displayName = appName.strippingAppSuffix
+        let systemFolder = InstallLocation.systemDirectory
+
+        // "System extension" is the accurate term and appears in the macOS prompts
+        // this app will trigger later, so someone searching the phrase finds the
+        // right answers. The sentence around it carries the meaning either way.
+        let cause = "\(displayName) includes a system extension, which macOS only allows to run from the "
+            + "\(systemFolder.lastPathComponent) folder."
+
+        let informative: String
+        if canInstallToSystem {
+            informative = """
+            \(cause)
+
+            EasyDMG is set to install to \(preferred.path), where \(displayName) would install but wouldn't work.
+            """
+        } else {
+            informative = """
+            \(cause)
+
+            Your account doesn't have permission to install there, so \(displayName) can't be installed on this account. You may need to ask whoever administers this Mac.
+            """
+        }
+
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "\(displayName) needs to install in \(systemFolder.lastPathComponent)"
+            alert.informativeText = informative
+
+            if canInstallToSystem {
+                alert.addButton(withTitle: "Install to \(systemFolder.lastPathComponent)")
+            } else {
+                // Deliberately not "Install Manually": dragging the app anywhere this
+                // account can write leaves it just as broken, so the button promises
+                // only what it delivers — a look at the app, and the user's own call
+                // on what to do with it.
+                alert.addButton(withTitle: "Open in Finder")
+            }
+            alert.addButton(withTitle: "Cancel")
+
+            presentHostedAlert(alert) { response in
+                guard response == .alertFirstButtonReturn else {
+                    continuation.resume(returning: .cancel)
+                    return
+                }
+
+                continuation.resume(returning: canInstallToSystem ? .installToSystem : .openInFinder)
+            }
+        }
     }
 
     private func showInstallLocationFallbackDialog(
@@ -2886,6 +3051,83 @@ class DMGProcessor: ObservableObject {
             compactName.hasSuffix("readme")
     }
 
+    /// Scans an app bundle for the payloads that tie it to /Applications.
+    ///
+    /// Deliberately shallow: this reports what the bundle *ships*, not whether the
+    /// app actually uses it at runtime, which nothing here can know. Only apps that
+    /// carry a hard requirement are worth interrupting, so a marker we can't stand
+    /// behind is recorded and otherwise ignored.
+    private func systemLocationMarkers(for path: String) -> [SystemLocationMarker] {
+        let bundleURL = URL(fileURLWithPath: path)
+        var markers: [SystemLocationMarker] = []
+
+        if bundleContainsSystemExtension(at: bundleURL) {
+            markers.append(.systemExtension)
+        }
+
+        if bundleDirectoryHasContents(at: bundleURL, subpath: "Contents/Library/LaunchDaemons") {
+            markers.append(.launchDaemon)
+        }
+
+        if declaresPrivilegedHelper(at: bundleURL) {
+            markers.append(.privilegedHelper)
+        }
+
+        return markers
+    }
+
+    /// System Extensions uses two bundle types here: `.systemextension` for system
+    /// services and `.dext` for DriverKit drivers. A similarly named loose file or
+    /// unrelated folder is not enough to override the user's install preference.
+    private func bundleContainsSystemExtension(at bundleURL: URL) -> Bool {
+        let directoryURL = bundleURL.appendingPathComponent("Contents/Library/SystemExtensions")
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        return entries.contains { entry in
+            let pathExtension = entry.pathExtension
+            let hasSupportedExtension = pathExtension.caseInsensitiveCompare("systemextension") == .orderedSame
+                || pathExtension.caseInsensitiveCompare("dext") == .orderedSame
+            guard hasSupportedExtension,
+                  let values = try? entry.resourceValues(forKeys: [.isDirectoryKey]) else {
+                return false
+            }
+            return values.isDirectory == true
+        }
+    }
+
+    /// True when `subpath` is a directory holding at least one real entry. An empty
+    /// folder means nothing actually ships there, and a stray dotfile isn't payload.
+    private func bundleDirectoryHasContents(at bundleURL: URL, subpath: String) -> Bool {
+        let directoryURL = bundleURL.appendingPathComponent(subpath)
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              let entries = try? FileManager.default.contentsOfDirectory(atPath: directoryURL.path) else {
+            return false
+        }
+
+        return entries.contains { !$0.hasPrefix(".") }
+    }
+
+    private func declaresPrivilegedHelper(at bundleURL: URL) -> Bool {
+        let infoPlistURL = bundleURL.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: infoPlistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let info = plist as? [String: Any],
+              let executables = info["SMPrivilegedExecutables"] as? [String: Any] else {
+            return false
+        }
+
+        return !executables.isEmpty
+    }
+
     private func appBundleValidationIssue(for path: String) -> AppBundleValidationIssue? {
         let appURL = URL(fileURLWithPath: path)
         let infoPlistURL = appURL.appendingPathComponent("Contents/Info.plist")
@@ -2943,8 +3185,28 @@ class DMGProcessor: ObservableObject {
         let resolvedAppName = appName(from: appPath)
         var shouldReplaceExistingApp = false
 
+        // Read the bundle before any destination decision is made: what it ships
+        // changes which destinations are worth offering, and resolveInstallDirectory
+        // owns that choice.
+        let locationMarkers = systemLocationMarkers(for: appPath)
+        if !locationMarkers.isEmpty {
+            support(
+                event: "install_location_markers",
+                details: [
+                    "app": resolvedAppName,
+                    "dmg": dmgName,
+                    "location": UserPreferences.shared.installLocation.rawValue,
+                    "markers": locationMarkers.map(\.rawValue).sorted().joined(separator: ",")
+                ]
+            )
+        }
+
         let installDirectory: URL
-        switch await resolveInstallDirectory(appName: resolvedAppName, dmgName: dmgName) {
+        switch await resolveInstallDirectory(
+            appName: resolvedAppName,
+            dmgName: dmgName,
+            requiresSystemLocation: locationMarkers.contains(.systemExtension)
+        ) {
         case .resolved(let directory):
             installDirectory = directory
 
