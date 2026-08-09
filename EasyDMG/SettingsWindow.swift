@@ -635,6 +635,12 @@ private struct InstallLocationSection: View {
     /// user changes folder permissions or gains admin rights outside the app.
     @State private var refreshToken = 0
 
+    @State private var isHoveringPath = false
+
+    /// Set when creating the Personal folder fails. `isWritable` treats that folder's
+    /// absence as normal — it is made on demand — so nothing else would report it.
+    @State private var couldNotCreateFolder = false
+
     private var directory: URL { preferences.installDirectory }
 
     private var isWritable: Bool {
@@ -644,6 +650,21 @@ private struct InstallLocationSection: View {
 
     private var canOfferUserFolder: Bool {
         preferences.installLocation != .userApplications
+    }
+
+    /// The blocker to show in place of the description, if there is one. A failed
+    /// creation wins: it is the more specific answer, and it is what the user just
+    /// asked for by clicking the path.
+    private var warningMessage: String? {
+        if couldNotCreateFolder {
+            return "EasyDMG couldn't create this folder, so installs will fail. Your disk may be full, or your home folder may not allow changes."
+        }
+
+        if !isWritable {
+            return "This folder isn't writable by your account, so installs will fail. That usually means the account isn't an administrator."
+        }
+
+        return nil
     }
 
     var body: some View {
@@ -661,19 +682,37 @@ private struct InstallLocationSection: View {
             )
 
             HStack(spacing: 6) {
-                Image(systemName: "folder")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.subtle)
+                // The readout doubles as the way to go look at the folder. A button
+                // here would have to sit beside "Choose…" and look like its twin
+                // while doing something else entirely, so the affordance rides on
+                // the thing that already stands for the location.
+                Button {
+                    showInFinder()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 11))
 
-                // Full path rather than the ~ shorthand: the point of this readout is
-                // that someone can go find their installed apps, and Finder never
-                // shows a tilde — it shows the account name.
-                Text(directory.path)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(theme.subtle)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(directory.path)
+                        // Full path rather than the ~ shorthand: the point of this readout is
+                        // that someone can go find their installed apps, and Finder never
+                        // shows a tilde — it shows the account name.
+                        Text(directory.path)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .underline(isHoveringPath)
+                    }
+                    .foregroundStyle(isHoveringPath ? theme.text : theme.subtle)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Show \(directory.path) in Finder")
+                .onHover { hovering in
+                    isHoveringPath = hovering
+                    // `set` rather than `push`/`pop`: a missed exit event would
+                    // otherwise leave the pointing hand stuck for the session.
+                    (hovering ? NSCursor.pointingHand : NSCursor.arrow).set()
+                }
 
                 if preferences.installLocation == .custom {
                     Button("Choose…") { chooseCustomFolder() }
@@ -686,12 +725,7 @@ private struct InstallLocationSection: View {
             // The neutral description gives way to the warning: someone who has just
             // been told installs will fail here has no use for "apps go in a folder
             // you pick", and dropping it keeps this group to three stacked blocks.
-            if isWritable {
-                Text(preferences.installLocation.explanation)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.muted)
-                    .lineSpacing(2)
-            } else {
+            if let warning = warningMessage {
                 // A bordered callout rather than one more paragraph: this is a
                 // blocker, and the box stops it blending into the text above it.
                 // The path stays out of the sentence — it is on the row directly
@@ -702,7 +736,7 @@ private struct InstallLocationSection: View {
                         .foregroundStyle(SettingsPalette.warningText)
                         .padding(.top, 1)
 
-                    Text("This folder isn't writable by your account, so installs will fail. That usually means the account isn't an administrator.")
+                    Text(warning)
                         .font(.system(size: 11.5))
                         .foregroundStyle(SettingsPalette.warningText)
                         .lineSpacing(2)
@@ -724,10 +758,21 @@ private struct InstallLocationSection: View {
                         .strokeBorder(theme.border, lineWidth: 1)
                 )
                 .transition(.opacity)
+            } else {
+                Text(preferences.installLocation.explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.muted)
+                    .lineSpacing(2)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshToken += 1
+
+            // Someone who went and made the folder by hand shouldn't come back to a
+            // warning about it.
+            if FileManager.default.fileExists(atPath: directory.path) {
+                couldNotCreateFolder = false
+            }
         }
     }
 
@@ -738,8 +783,36 @@ private struct InstallLocationSection: View {
             return
         }
 
+        // The warning belongs to the folder that failed, not to whatever is picked next.
+        couldNotCreateFolder = false
         preferences.installLocation = location
         refreshToken += 1
+    }
+
+    /// Opens the install folder so someone can see for themselves where apps land.
+    private func showInFinder() {
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            // Personal is the one folder EasyDMG makes itself, so it can be honest
+            // about the path it just displayed. Opening anywhere else — the home
+            // folder, say — drops the user somewhere that visibly lacks the folder
+            // the readout names, which reads as the app being wrong about its own
+            // setting. Everywhere else, a missing folder already raises the warning
+            // below this readout, so there is nothing useful to open.
+            guard directory == preferences.userApplicationsDirectory else { return }
+
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            } catch {
+                // The warning below the readout carries this rather than an alert:
+                // the user asked to look at a folder, not to start an install.
+                DiagnosticLogger.shared.diagnostic("Failed to create install folder \(directory.path): \(error)")
+                couldNotCreateFolder = true
+                return
+            }
+        }
+
+        couldNotCreateFolder = false
+        NSWorkspace.shared.open(directory)
     }
 
     private func chooseCustomFolder() {
@@ -1003,9 +1076,9 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
             // Deliberately says nothing about administrator accounts. Most people
             // have the rights already, and raising the requirement here reads as a
             // hurdle. `isWritable` surfaces the warning only when it actually bites.
-            return "The usual place for Mac apps. Installs to your Applications folder, available to everyone who uses this Mac."
+            return "The usual place for Mac apps. Recommended for most people."
         case .userApplications:
-            return "Installs to an Applications folder inside your home folder, available only to you. Useful on a shared, work, or school Mac."
+            return "Installs to a personal Applications folder inside your home folder. Useful on work, school, or shared Macs."
         case .custom:
             return "Apps are installed in a folder you pick."
         }

@@ -31,7 +31,7 @@ After setting EasyDMG as your default app for opening DMGs, opening any DMG will
 - **Cautious by default**: Designed to make installation easy while staying safe. When ambiguity arises, if EasyDMG can handle it safely (such as retrying passwords or evaluating licenses), it does; otherwise, it gracefully falls back to manual installation.
 - **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, the rest take one click, and you can disable the prompt entirely in Settings. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 - **Automatic updates**: Built-in Sparkle integration for easy updates
-- **It's fun**: The wizard hamster updates you on his silly antics in the progress bar. See more hamster wizard on the [website](https://easydmg.app).
+- **It's fun**: The wizard hamster updates you on his silly antics in the progress bar. Learn how to summon your own hamster wizard on the [website](https://easydmg.app/summon-a-wizard-hamster).
 
 ## Screenshots
 
