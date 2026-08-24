@@ -42,7 +42,7 @@ Before starting, make sure all of these are true:
 
 - `Developer ID Application: Jeffrey Schumann (M2ABUL7722)` is installed.
 - Sparkle signing key exists in Keychain.
-- `notarytool` profile exists and works.
+- The `Notary-API` `notarytool` profile exists and works.
 - `gh` is logged in if you want to create the GitHub release from the terminal.
 
 Useful checks:
@@ -50,14 +50,34 @@ Useful checks:
 ```bash
 security find-identity -v -p codesigning | rg "Developer ID Application|Apple Development"
 security find-generic-password -s https://sparkle-project.org -a ed25519 -g 2>&1 | head -20
-xcrun notarytool history --keychain-profile EasyDMG
+xcrun notarytool history --keychain-profile Notary-API
 gh auth status
 ```
 
 Notes:
+- `Notary-API` uses a dedicated App Store Connect team API key with Developer access. Do not use an individual API key; `notarytool` does not support individual keys.
+- Keep the API key's `.p8` file securely backed up outside this repository. Apple only allows it to be downloaded once.
 - The Sparkle keychain item should use service `https://sparkle-project.org` and account `ed25519`.
 - The public key in the keychain comment should match `SUPublicEDKey` in `EasyDMG/Info.plist`.
 - Some release commands may need full system/keychain access. If `xcodebuild -exportArchive`, `hdiutil create`, or Sparkle `sign_update` say a cert/key is missing or the device is not configured, rerun outside the sandbox.
+
+### Configure Notarization Credentials On A New Mac
+
+Create the reusable Keychain profile with the dedicated App Store Connect team API key:
+
+```bash
+xcrun notarytool store-credentials "Notary-API" \
+  --key "/FULL/PATH/TO/AuthKey_YOUR_KEY_ID.p8" \
+  --key-id "YOUR_KEY_ID" \
+  --issuer "YOUR_ISSUER_ID" \
+  --validate
+```
+
+Do not put the real key ID, issuer ID, or `.p8` file in this repository. Confirm the saved profile works:
+
+```bash
+xcrun notarytool history --keychain-profile Notary-API
+```
 
 ## Agent Sandbox Permissions
 
@@ -158,14 +178,14 @@ Submit with the saved keychain profile:
 
 ```bash
 xcrun notarytool submit /Users/jeff/Jeff/Projects/EasyDMG/EasyDMG.dmg \
-  --keychain-profile EasyDMG \
+  --keychain-profile Notary-API \
   --wait
 ```
 
 If notarization fails, fetch the log:
 
 ```bash
-xcrun notarytool log <submission-id> --keychain-profile EasyDMG
+xcrun notarytool log <submission-id> --keychain-profile Notary-API
 ```
 
 ## Staple And Validate
@@ -346,7 +366,7 @@ Use these instead:
 
 These were valid during the `1.0.4` release:
 
-- Notary profile: `EasyDMG`
+- Notary profile: `Notary-API` (dedicated App Store Connect team API key with Developer access)
 - Team ID: `M2ABUL7722`
 - Bundle ID: `com.jeff.easydmg`
 - Sparkle public key is already set in `EasyDMG/Info.plist`

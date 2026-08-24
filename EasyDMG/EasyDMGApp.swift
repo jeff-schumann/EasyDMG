@@ -335,6 +335,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                 self.diagnostic("✅ Update check timeout reached, allowing quit")
                 self.isWaitingForUpdateCheck = false
+
+                // A fast manual handoff (such as a license agreement) can finish
+                // before this wait expires. If so, the queue already asked to quit
+                // and there will be no later processing event to ask again.
+                if self.launchedWithFiles && !self.dmgProcessor.isProcessing {
+                    self.diagnostic("✅ Processing already complete, retrying deferred quit")
+                    self.handleQueueDrained()
+                }
             }
         } else {
             diagnostic("ℹ️ Skipping update check (checked recently)")
@@ -428,6 +436,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let settingsWindowIsOpen = settingsWindow.map { $0.isVisible || $0.isMiniaturized } == true
 
         guard isSettingsSession && settingsWindowIsOpen else {
+            guard !isWaitingForUpdateCheck else {
+                diagnostic("⏳ Processing queue complete, deferring quit until update check wait ends")
+                support(event: "queue_complete", details: ["action": "defer_quit", "reason": "update_check"])
+                return
+            }
+
             diagnostic("✅ Processing queue complete, quitting app")
             support(event: "queue_complete", details: ["action": "quit"])
             NSApp.terminate(nil)
