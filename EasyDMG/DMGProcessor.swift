@@ -568,15 +568,18 @@ class DMGProcessor: ObservableObject {
         case installLocationDeclined = "install_location_declined"
         case installLocationUnavailable = "install_location_unavailable"
         case requiresSystemLocation = "requires_system_location"
+        case appManagementDenied = "app_management_denied"
+        case rootOwnedReplacementDenied = "root_owned_replacement_denied"
+        case copyFailed = "copy_or_replace_failed"
 
         func notificationTitle(appName: String) -> String {
             switch self {
-            case .invalidAppBundle, .genericMountFailure:
-                return "The hamster bows out 🐹"
-            case .packageInstaller:
-                return "\(appName) uses a .pkg installer"
-            case .installerOrAuxiliaryApp:
-                return "\(appName) uses an installer"
+            case .genericMountFailure:
+                return "Couldn't Open DMG"
+            case .invalidAppBundle:
+                return "Couldn't Install App"
+            case .packageInstaller, .installerOrAuxiliaryApp:
+                return "Run the Installer"
             // Dead copy as of the new password flow: every password path now exits
             // through resolveEncryptedMount, which either auto-installs, uses our own
             // dialog, or hands off to the macOS prompt with notify:false — so this
@@ -586,43 +589,49 @@ class DMGProcessor: ObservableObject {
             case .passwordProtected:
                 return "\(appName) is password-protected"
             case .noAppFound:
-                return "No app found"
+                return "No App Found"
             case .multipleAppsFound:
-                return "Ready for manual installation"
+                return "Multiple Apps Found"
             case .licenseRequired:
-                return "\(appName) has a license to accept"
+                return "Review License Agreement"
             case .manualInstallReady:
-                return "Ready for manual installation"
+                return "Finish Installing"
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 return "EasyDMG needs manual install"
             case .installLocationDeclined, .installLocationUnavailable, .requiresSystemLocation:
                 return "EasyDMG needs manual install"
+            case .appManagementDenied:
+                return "Permission Needed"
+            case .rootOwnedReplacementDenied:
+                return "Password Required"
+            case .copyFailed:
+                return "Couldn't Install App"
             }
         }
 
         func notificationMessage(appName: String) -> String? {
             switch self {
             case .genericMountFailure:
-                return "Failure during mount — switching to manual mode."
+                return "Handing off \(appName) to Finder so you can install manually."
             case .invalidAppBundle:
-                return "Invalid app bundle — switching to manual mode."
+                return "Invalid app bundle; switching to manual install."
             case .packageInstaller:
-                return "Open the installer in the window and follow the steps."
+                return "\(appName) installs with a .pkg - open it in the Finder window and follow the steps."
             case .installerOrAuxiliaryApp:
-                return "Open it in the window and follow the steps to finish."
+                return "\(appName) comes with its own installer. Open it in the Finder window and follow the steps."
             // Dead + stale copy — see the note on .passwordProtected in
             // notificationTitle. Not shown by the current flow; left in for this
             // release pending confidence in the new password flow's stability.
             case .passwordProtected:
                 return "Enter its password, then drag the app into Applications."
             case .noAppFound:
-                return "EasyDMG opened it so you can take a look."
+                return "Nothing to install automatically. Opened in Finder so you can take a look."
             case .multipleAppsFound:
-                return "This disk image contains multiple apps. Choose which ones to move to Applications."
+                return "This DMG contains multiple apps. Choose which ones to move to Applications."
             case .licenseRequired:
-                return "Review and accept the agreement in the window to continue."
+                return "Review \(appName)'s license agreement in the window to continue."
             case .manualInstallReady:
-                return "Continue installing \(appName) from the open disk image."
+                return "Drag \(appName) into Applications from the open Finder window."
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
                 return nil
@@ -630,6 +639,13 @@ class DMGProcessor: ObservableObject {
                 // The user just dismissed a dialog about this, so the notification would
                 // be redundant — the opened window is the answer.
                 return nil
+            case .appManagementDenied:
+                return "Drag \(appName) into Applications. To avoid this next time, enable EasyDMG in System Settings > Privacy & Security > App Management."
+            case .rootOwnedReplacementDenied:
+                // App Management can't grant ownership, so don't point the user at it.
+                return "Drag \(appName) into Applications. Your Mac may ask for your password."
+            case .copyFailed:
+                return "Copy failed. Drag \(appName) into Applications from the open Finder window."
             }
         }
     }
@@ -1190,7 +1206,7 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private func sendFailureNotificationIfAvailable(message: String) async {
+    private func sendFailureNotificationIfAvailable(title: String, message: String) async {
         guard UserPreferences.shared.feedbackMode != .silent else {
             return
         }
@@ -1201,7 +1217,7 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        await sendNotification(title: "EasyDMG install failed", message: message)
+        await sendNotification(title: title, message: message)
     }
 
     private func sendManualFallbackNotificationIfAvailable(
@@ -1356,7 +1372,10 @@ class DMGProcessor: ObservableObject {
             diagnostic("DMG file missing before processing: \(url.path)")
             support(event: "processing_error", details: ["dmg": currentDMGName, "reason": "file_not_found"])
             recordCompletion(dmgName: currentDMGName, outcome: "error", details: ["reason": "file_not_found"])
-            await handleError("File not found: \(url.lastPathComponent)")
+            await handleError(
+                title: "Couldn't Install App",
+                message: "Couldn't find \(url.lastPathComponent). It may have been moved or deleted."
+            )
             return
         }
 
@@ -1809,7 +1828,7 @@ class DMGProcessor: ObservableObject {
     private func existingMountPoint(
         forDMGPath dmgPath: String,
         dmgName: String,
-        timeout: TimeInterval = 15,
+        timeout: TimeInterval = 5,
         logFailure: Bool = true
     ) async -> String? {
         let result: AssessmentProcessResult
@@ -2625,14 +2644,17 @@ class DMGProcessor: ObservableObject {
         return totalSize
     }
 
-    private func hasEnoughDiskSpace(requiredBytes: UInt64, in directory: URL) -> Bool {
+    /// Returns how many more bytes must be freed before installing, or nil if there's enough room.
+    /// Includes a 500MB safety buffer on top of the app's size.
+    private func diskSpaceShortfall(requiredBytes: UInt64, in directory: URL) -> UInt64? {
         guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: directory.path),
               let freeSpace = attrs[.systemFreeSize] as? UInt64 else {
-            return true
+            return nil
         }
 
         let bufferSize: UInt64 = 500 * 1024 * 1024
-        return freeSpace > (requiredBytes + bufferSize)
+        let neededSpace = requiredBytes + bufferSize
+        return freeSpace > neededSpace ? nil : neededSpace - freeSpace + 1
     }
 
     private func validateInstallDirectory(
@@ -3514,9 +3536,8 @@ class DMGProcessor: ObservableObject {
 
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
-        if !hasEnoughDiskSpace(requiredBytes: appSize, in: installDirectory) {
-            let sizeInGB = Double(appSize) / (1024 * 1024 * 1024)
-            diagnostic("Insufficient disk space for app size \(appSize)")
+        if let shortfall = diskSpaceShortfall(requiredBytes: appSize, in: installDirectory) {
+            diagnostic("Insufficient disk space for app size \(appSize), short by \(shortfall) bytes")
             support(
                 event: "install_result",
                 details: [
@@ -3524,6 +3545,7 @@ class DMGProcessor: ObservableObject {
                     "dmg": dmgName,
                     "reason": "insufficient_disk_space",
                     "required_bytes": String(appSize),
+                    "shortfall_bytes": String(shortfall),
                     "result": "failed"
                 ]
             )
@@ -3532,7 +3554,10 @@ class DMGProcessor: ObservableObject {
                 outcome: "error",
                 details: ["app": resolvedAppName, "reason": "insufficient_disk_space"]
             )
-            await handleError("Insufficient disk space (need \(String(format: "%.1f", sizeInGB))GB)")
+            await handleError(
+                title: "Not Enough Space",
+                message: "Free up \(ByteCountFormatter.string(fromByteCount: Int64(shortfall), countStyle: .file)) on your Mac, then try again."
+            )
             _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
             return
         }
@@ -3600,7 +3625,8 @@ class DMGProcessor: ObservableObject {
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
                     dmgName: dmgName,
-                    preserveMount: preserveMountOnCancel
+                    preserveMount: preserveMountOnCancel,
+                    progress: 0.3
                 )
                 ProgressWindowController.shared.hide()
                 var completionDetails = quarantineDetails
@@ -3638,7 +3664,10 @@ class DMGProcessor: ObservableObject {
             )
 
             if currentFeedbackMode == .notification {
-                await sendNotification(title: "EasyDMG", message: "\(resolvedAppName.strippingAppSuffix) installed successfully")
+                await sendNotification(
+                    title: "App Installed",
+                    message: "\(resolvedAppName.strippingAppSuffix) is ready in your \(installDirectory.lastPathComponent) folder."
+                )
             }
         } catch {
             diagnostic("Installation failed while copying/replacing: \(error)")
@@ -3663,25 +3692,44 @@ class DMGProcessor: ObservableObject {
                 event: "install_result",
                 details: failureDetails
             )
-            recordCompletion(
-                dmgName: dmgName,
-                outcome: "error",
-                details: ["app": resolvedAppName, "reason": failureReason]
-            )
             if let targetProbe,
                targetProbe.target.automaticReplacementBlockReason != nil {
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "error",
+                    details: ["app": resolvedAppName, "reason": failureReason]
+                )
                 await showManagedAppReplacementBlockedDialog(
                     appName: resolvedAppName,
                     dmgName: dmgName,
                     target: targetProbe.target
                 )
-            } else {
-                let errorMessage = permissionDenied
-                    ? (targetProbe?.retryFailureMessage ?? "EasyDMG needs App Management permission. Open System Settings > Privacy & Security > App Management, enable EasyDMG, then try again.")
-                    : "Installation failed"
-                await handleError(errorMessage)
+                _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.6)
+                return
             }
-            _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.6)
+
+            // Neither remaining failure rules out a manual install: Finder needs no
+            // App Management permission, and a copy error says nothing bad about the
+            // disk image itself. Hand off instead of dead-ending on an error alert.
+            // openForManualInstallation records completion and sends the notification,
+            // and it deliberately leaves the volume mounted so the user can drag from
+            // it, so there is no recordCompletion or unmount on these paths.
+            // "result" belongs to install_result; other manual_fallback events don't carry it.
+            var fallbackDetails = failureDetails
+            fallbackDetails.removeValue(forKey: "result")
+            let fallbackReason: ManualFallbackReason
+            if targetProbe?.target.probableRestriction == "root_owned" {
+                fallbackReason = .rootOwnedReplacementDenied
+            } else {
+                fallbackReason = permissionDenied ? .appManagementDenied : .copyFailed
+            }
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                dmgName: dmgName,
+                reason: fallbackReason,
+                appName: resolvedAppName,
+                details: fallbackDetails
+            )
             return
         }
 
@@ -4527,12 +4575,13 @@ class DMGProcessor: ObservableObject {
         mountPoint: String,
         dmgPath: String,
         dmgName: String,
-        preserveMount: Bool
+        preserveMount: Bool,
+        progress: Double? = nil
     ) async {
         if preserveMount {
             diagnostic("Installation canceled; leaving pre-existing mount open at \(mountPoint)")
         } else {
-            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: progress)
         }
         _ = trashDMGIfNeeded(at: dmgPath, shouldTrash: false, dmgName: dmgName)
     }
@@ -5149,10 +5198,10 @@ class DMGProcessor: ObservableObject {
         try? await Task.sleep(nanoseconds: 800_000_000)
     }
 
-    private func handleError(_ message: String) async {
-        diagnostic("Error: \(message)")
-        showProgress("Error: \(message)", progress: 0.0)
-        await sendFailureNotificationIfAvailable(message: message)
+    private func handleError(title: String, message: String) async {
+        diagnostic("Error: \(title): \(message)")
+        showProgress(title, progress: 0.0)
+        await sendFailureNotificationIfAvailable(title: title, message: message)
 
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         ProgressWindowController.shared.hide()
