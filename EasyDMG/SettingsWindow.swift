@@ -465,7 +465,7 @@ struct SettingsTabView: View {
                         .font(.system(size: 12.5, weight: .bold))
                         .foregroundStyle(theme.text)
 
-                    Toggle("Move DMG to trash after installation", isOn: $preferences.autoTrashDMG)
+                    Toggle("Move DMG to trash after successful installation", isOn: $preferences.autoTrashDMG)
                         .toggleStyle(SettingsCheckboxStyle(theme: theme))
 
                     Toggle("Reveal app in Finder after installation", isOn: $preferences.revealInFinder)

@@ -3350,27 +3350,18 @@ class DMGProcessor: ObservableObject {
                     event: "install_decision",
                     details: ["action": "cancel", "app": resolvedAppName, "dmg": dmgName]
                 )
-                let didTrashDMG = await unmountAndCleanup(
+                await unmountAndKeepDMG(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
-                    dmgName: dmgName,
-                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
+                    dmgName: dmgName
                 )
-
-                if currentFeedbackMode == .notification && didTrashDMG {
-                    await sendNotification(
-                        title: "EasyDMG",
-                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
-                    )
-                }
 
                 ProgressWindowController.shared.hide()
                 recordCompletion(
                     dmgName: dmgName,
                     outcome: "canceled",
                     details: [
-                        "app": resolvedAppName,
-                        "trashed_dmg": boolString(didTrashDMG)
+                        "app": resolvedAppName
                     ]
                 )
                 return
@@ -3397,19 +3388,11 @@ class DMGProcessor: ObservableObject {
             )
             if !canProceed {
                 diagnostic("Installation canceled at running-app prompt for \(resolvedAppName)")
-                let didTrashDMG = await unmountAndCleanup(
+                await unmountAndKeepDMG(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
-                    dmgName: dmgName,
-                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
+                    dmgName: dmgName
                 )
-
-                if currentFeedbackMode == .notification && didTrashDMG {
-                    await sendNotification(
-                        title: "EasyDMG",
-                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
-                    )
-                }
 
                 ProgressWindowController.shared.hide()
                 recordCompletion(
@@ -3417,8 +3400,7 @@ class DMGProcessor: ObservableObject {
                     outcome: "skipped",
                     details: [
                         "app": resolvedAppName,
-                        "reason": "running_app_canceled",
-                        "trashed_dmg": boolString(didTrashDMG)
+                        "reason": "running_app_canceled"
                     ]
                 )
                 return
@@ -3436,19 +3418,11 @@ class DMGProcessor: ObservableObject {
             )
             if case let .blocked(reason) = modificationPreflight {
                 diagnostic("Installation canceled before replacing \(resolvedAppName): \(reason)")
-                let didTrashDMG = await unmountAndCleanup(
+                await unmountAndKeepDMG(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
-                    dmgName: dmgName,
-                    shouldTrashDMG: UserPreferences.shared.autoTrashDMG
+                    dmgName: dmgName
                 )
-
-                if currentFeedbackMode == .notification && didTrashDMG {
-                    await sendNotification(
-                        title: "EasyDMG",
-                        message: "\(resolvedAppName.strippingAppSuffix) install canceled; disk image moved to Trash"
-                    )
-                }
 
                 ProgressWindowController.shared.hide()
                 recordCompletion(
@@ -3456,8 +3430,7 @@ class DMGProcessor: ObservableObject {
                     outcome: "skipped",
                     details: [
                         "app": resolvedAppName,
-                        "reason": reason,
-                        "trashed_dmg": boolString(didTrashDMG)
+                        "reason": reason
                     ]
                 )
                 return
@@ -4469,21 +4442,14 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private func unmountAndCleanup(
+    /// Canceled installs always keep the DMG, regardless of the auto-trash setting.
+    private func unmountAndKeepDMG(
         mountPoint: String,
         dmgPath: String,
-        dmgName: String,
-        shouldTrashDMG: Bool
-    ) async -> Bool {
+        dmgName: String
+    ) async {
         _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
-
-        if shouldTrashDMG {
-            showProgress("Moving disk image to trash...", progress: 0.8)
-        } else {
-            showProgress("Keeping disk image...", progress: 0.8)
-        }
-
-        return trashDMGIfNeeded(at: dmgPath, shouldTrash: shouldTrashDMG, dmgName: dmgName)
+        _ = trashDMGIfNeeded(at: dmgPath, shouldTrash: false, dmgName: dmgName)
     }
 
     private nonisolated func assessAppSecurity(at appPath: String) async -> AppSecurityAssessment {
