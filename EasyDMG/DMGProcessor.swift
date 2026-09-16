@@ -562,6 +562,7 @@ class DMGProcessor: ObservableObject {
         case noAppFound = "no_app_found"
         case multipleAppsFound = "multiple_apps_found"
         case licenseRequired = "license_required"
+        case manualInstallReady = "manual_install_ready"
         case securityAssessmentUnverified = "security_assessment_unverified"
         case securityAssessmentBlocked = "security_assessment_blocked"
         case installLocationDeclined = "install_location_declined"
@@ -587,9 +588,11 @@ class DMGProcessor: ObservableObject {
             case .noAppFound:
                 return "No app found"
             case .multipleAppsFound:
-                return "\(appName) has more than one app"
+                return "Ready for manual installation"
             case .licenseRequired:
                 return "\(appName) has a license to accept"
+            case .manualInstallReady:
+                return "Ready for manual installation"
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 return "EasyDMG needs manual install"
             case .installLocationDeclined, .installLocationUnavailable, .requiresSystemLocation:
@@ -615,9 +618,11 @@ class DMGProcessor: ObservableObject {
             case .noAppFound:
                 return "EasyDMG opened it so you can take a look."
             case .multipleAppsFound:
-                return "Choose which app to drag into your Applications folder."
+                return "This disk image contains multiple apps. Choose which ones to move to Applications."
             case .licenseRequired:
                 return "Review and accept the agreement in the window to continue."
+            case .manualInstallReady:
+                return "Continue installing \(appName) from the open disk image."
             case .securityAssessmentUnverified, .securityAssessmentBlocked:
                 // Security cases already showed a prompt to the user, so no follow-up notification.
                 return nil
@@ -1381,11 +1386,21 @@ class DMGProcessor: ObservableObject {
             mountPoint = unlockedMountPoint
         } else {
             if await hasLicenseAgreement(dmgPath: url.path, dmgName: currentDMGName) {
-                await openForManualInstallation(
-                    dmgPath: url.path,
-                    dmgName: currentDMGName,
-                    reason: .licenseRequired
-                )
+                if let existingMountPoint = await existingMountPoint(
+                    forDMGPath: url.path,
+                    dmgName: currentDMGName
+                ) {
+                    await openMountedLicensedDMGForManualInstallation(
+                        mountPoint: existingMountPoint,
+                        dmgName: currentDMGName
+                    )
+                } else {
+                    await openForManualInstallation(
+                        dmgPath: url.path,
+                        dmgName: currentDMGName,
+                        reason: .licenseRequired
+                    )
+                }
                 return
             }
 
@@ -1417,111 +1432,14 @@ class DMGProcessor: ObservableObject {
         }
 
         showProgress("Scanning for apps...", progress: 0.2)
-        let appFiles = findAppFiles(in: mountPoint)
-        let packageFiles = findPackageFiles(in: mountPoint)
-
-        if !packageFiles.isEmpty {
-            let packageNames = appNames(from: packageFiles)
-            diagnostic("Manual fallback: package installer(s) found: \(packageNames)")
-            await openForManualInstallation(
-                mountPoint: mountPoint,
-                dmgName: currentDMGName,
-                reason: .packageInstaller,
-                details: [
-                    "app_count": String(appFiles.count),
-                    "package_count": String(packageFiles.count),
-                    "package_names": joinedNames(packageNames),
-                    "volume": volumeName(from: mountPoint)
-                ]
-            )
+        guard let appPath = await scanMountedContents(
+            mountPoint: mountPoint,
+            dmgName: currentDMGName
+        ) else {
             return
         }
 
-        let mainApps = appFiles.filter { path in
-            !isInstallerLikeApp(at: path)
-        }
-
-        let finalAppFiles = mainApps.count == 1 ? mainApps : appFiles
-        let finalAppNames = appNames(from: finalAppFiles)
-        support(
-            event: "app_scan_result",
-            details: [
-                "app_count": String(finalAppFiles.count),
-                "app_names": joinedNames(finalAppNames),
-                "dmg": currentDMGName,
-                "package_count": String(packageFiles.count),
-                "raw_app_count": String(appFiles.count),
-                "volume": volumeName(from: mountPoint)
-            ]
-        )
-
-        switch finalAppFiles.count {
-        case 0:
-            diagnostic("Manual fallback: no .app files found at \(mountPoint)")
-            await openForManualInstallation(
-                mountPoint: mountPoint,
-                dmgName: currentDMGName,
-                reason: .noAppFound,
-                details: [
-                    "app_count": "0",
-                    "volume": volumeName(from: mountPoint)
-                ]
-            )
-            return
-
-        case 1:
-            let appPath = finalAppFiles[0]
-            if isInstallerLikeApp(at: appPath) {
-                let candidateName = appName(from: appPath)
-                diagnostic("Manual fallback: single app looks like an installer or auxiliary app: \(candidateName)")
-                await openForManualInstallation(
-                    mountPoint: mountPoint,
-                    dmgName: currentDMGName,
-                    reason: .installerOrAuxiliaryApp,
-                    appName: candidateName,
-                    details: [
-                        "app": candidateName,
-                        "app_count": "1",
-                        "volume": volumeName(from: mountPoint)
-                    ]
-                )
-                return
-            }
-
-            if let issue = appBundleValidationIssue(for: appPath) {
-                let candidateName = appName(from: appPath)
-                diagnostic("Manual fallback: invalid app bundle (\(issue.rawValue)): \(candidateName)")
-                await openForManualInstallation(
-                    mountPoint: mountPoint,
-                    dmgName: currentDMGName,
-                    reason: .invalidAppBundle,
-                    appName: candidateName,
-                    details: [
-                        "app": candidateName,
-                        "app_count": "1",
-                        "validation_issue": issue.rawValue,
-                        "volume": volumeName(from: mountPoint)
-                    ]
-                )
-                return
-            }
-
-            await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path, dmgName: currentDMGName)
-
-        default:
-            diagnostic("Manual fallback: multiple .app files found (\(finalAppFiles.count)): \(finalAppNames)")
-            await openForManualInstallation(
-                mountPoint: mountPoint,
-                dmgName: currentDMGName,
-                reason: .multipleAppsFound,
-                details: [
-                    "app_count": String(finalAppFiles.count),
-                    "app_names": joinedNames(finalAppNames),
-                    "volume": volumeName(from: mountPoint)
-                ]
-            )
-            return
-        }
+        await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path, dmgName: currentDMGName)
     }
 
     /// Returns true if the DMG is encrypted (password-protected). Uses
@@ -1619,6 +1537,156 @@ class DMGProcessor: ObservableObject {
         }
     }
 
+    /// Sorts a mounted volume's top-level contents and opens Finder for every
+    /// outcome that needs a manual handoff. Only a single valid app comes back,
+    /// so each caller decides what to do with it: the normal flow installs it,
+    /// an already-mounted licensed image hands it to the user.
+    private func scanMountedContents(
+        mountPoint: String,
+        dmgName: String,
+        licenseAlreadyMounted: Bool = false
+    ) async -> String? {
+        let appFiles = findAppFiles(in: mountPoint)
+        let packageFiles = findPackageFiles(in: mountPoint)
+        let logPrefix = licenseAlreadyMounted ? "Manual fallback (license already mounted)" : "Manual fallback"
+
+        func withContext(_ details: [String: String]) -> [String: String] {
+            var merged = details
+            merged["volume"] = volumeName(from: mountPoint)
+            if licenseAlreadyMounted {
+                merged["license_already_mounted"] = "true"
+            }
+            return merged
+        }
+
+        if !packageFiles.isEmpty {
+            let packageNames = appNames(from: packageFiles)
+            diagnostic("\(logPrefix): package installer(s) found: \(packageNames)")
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                dmgName: dmgName,
+                reason: .packageInstaller,
+                details: withContext([
+                    "app_count": String(appFiles.count),
+                    "package_count": String(packageFiles.count),
+                    "package_names": joinedNames(packageNames)
+                ])
+            )
+            return nil
+        }
+
+        let mainApps = appFiles.filter { path in
+            !isInstallerLikeApp(at: path)
+        }
+
+        let finalAppFiles = mainApps.count == 1 ? mainApps : appFiles
+        let finalAppNames = appNames(from: finalAppFiles)
+        support(
+            event: "app_scan_result",
+            details: withContext([
+                "app_count": String(finalAppFiles.count),
+                "app_names": joinedNames(finalAppNames),
+                "dmg": dmgName,
+                "package_count": String(packageFiles.count),
+                "raw_app_count": String(appFiles.count)
+            ])
+        )
+
+        switch finalAppFiles.count {
+        case 0:
+            diagnostic("\(logPrefix): no .app files found at \(mountPoint)")
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                dmgName: dmgName,
+                reason: .noAppFound,
+                details: withContext(["app_count": "0"])
+            )
+            return nil
+
+        case 1:
+            let appPath = finalAppFiles[0]
+            let candidateName = appName(from: appPath)
+
+            if isInstallerLikeApp(at: appPath) {
+                diagnostic("\(logPrefix): single app looks like an installer or auxiliary app: \(candidateName)")
+                await openForManualInstallation(
+                    mountPoint: mountPoint,
+                    dmgName: dmgName,
+                    reason: .installerOrAuxiliaryApp,
+                    appName: candidateName,
+                    details: withContext([
+                        "app": candidateName,
+                        "app_count": "1"
+                    ])
+                )
+                return nil
+            }
+
+            if let issue = appBundleValidationIssue(for: appPath) {
+                diagnostic("\(logPrefix): invalid app bundle (\(issue.rawValue)): \(candidateName)")
+                await openForManualInstallation(
+                    mountPoint: mountPoint,
+                    dmgName: dmgName,
+                    reason: .invalidAppBundle,
+                    appName: candidateName,
+                    details: withContext([
+                        "app": candidateName,
+                        "app_count": "1",
+                        "validation_issue": issue.rawValue
+                    ])
+                )
+                return nil
+            }
+
+            return appPath
+
+        default:
+            diagnostic("\(logPrefix): multiple .app files found (\(finalAppFiles.count)): \(finalAppNames)")
+            await openForManualInstallation(
+                mountPoint: mountPoint,
+                dmgName: dmgName,
+                reason: .multipleAppsFound,
+                details: withContext([
+                    "app_count": String(finalAppFiles.count),
+                    "app_names": joinedNames(finalAppNames)
+                ])
+            )
+            return nil
+        }
+    }
+
+    /// A licensed image that is already mounted has already passed macOS's
+    /// agreement gate for this mount. Keep the install manual, but inspect the
+    /// visible top-level contents so the notification explains why EasyDMG is
+    /// handing control back to Finder instead of repeating the license prompt.
+    private func openMountedLicensedDMGForManualInstallation(
+        mountPoint: String,
+        dmgName: String
+    ) async {
+        guard let appPath = await scanMountedContents(
+            mountPoint: mountPoint,
+            dmgName: dmgName,
+            licenseAlreadyMounted: true
+        ) else {
+            return
+        }
+
+        let candidateName = appName(from: appPath)
+        diagnostic("Mounted licensed DMG is ready for manual installation: \(candidateName)")
+        await openForManualInstallation(
+            mountPoint: mountPoint,
+            dmgName: dmgName,
+            reason: .manualInstallReady,
+            appName: candidateName,
+            details: [
+                "app": candidateName,
+                "app_count": "1",
+                "license_already_mounted": "true",
+                "volume": volumeName(from: mountPoint),
+            ]
+        )
+    }
+
     private nonisolated static func plistContainsLicenseAgreement(_ value: Any) -> Bool {
         if let dictionary = value as? [String: Any] {
             for (key, childValue) in dictionary {
@@ -1688,9 +1756,9 @@ class DMGProcessor: ObservableObject {
     }
 
     /// Scan `hdiutil info -plist` for an already-attached copy of `dmgPath` and
-    /// return its mount point, if any. An encrypted image only appears here once it
-    /// has already been unlocked with the correct passphrase, so a hit means the
-    /// volume is genuinely open and safe to reuse.
+    /// return its mount point, if any. Matching the source image rather than only
+    /// the volume name keeps encrypted unlocks and licensed manual handoffs tied
+    /// to the exact DMG the user opened.
     private nonisolated static func parseExistingMountPoint(
         fromInfoPlist data: Data,
         matching dmgPath: String
@@ -1723,10 +1791,9 @@ class DMGProcessor: ObservableObject {
     }
 
     /// Return the mount point of an already-open copy of this DMG, or nil if it
-    /// isn't currently attached. Used to skip the passphrase prompt entirely when
-    /// the encrypted image is already unlocked — re-prompting would be pointless
-    /// (the contents are already exposed) and hdiutil accepts any passphrase, even
-    /// a wrong one, against an image that is already attached.
+    /// isn't currently attached. Encrypted images use this to skip a redundant
+    /// password prompt; licensed images use it to replace a stale agreement
+    /// notification with guidance based on the contents already visible in Finder.
     private func existingMountPoint(
         forDMGPath dmgPath: String,
         dmgName: String,
