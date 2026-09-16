@@ -1360,6 +1360,12 @@ class DMGProcessor: ObservableObject {
             return
         }
 
+        // Capture ownership before any mount attempt: hdiutil can also report
+        // success for a volume that was already attached before we started.
+        let previouslyMountedPoint = await existingMountPoint(
+            forDMGPath: url.path,
+            dmgName: currentDMGName
+        )
         let mountPoint: String
 
         // Encrypted DMGs need special handling: a plain `hdiutil attach` — and even
@@ -1439,7 +1445,13 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        await installApp(from: appPath, mountPoint: mountPoint, dmgPath: url.path, dmgName: currentDMGName)
+        await installApp(
+            from: appPath,
+            mountPoint: mountPoint,
+            dmgPath: url.path,
+            dmgName: currentDMGName,
+            preserveMountOnCancel: previouslyMountedPoint == mountPoint
+        )
     }
 
     /// Returns true if the DMG is encrypted (password-protected). Uses
@@ -1824,6 +1836,24 @@ class DMGProcessor: ObservableObject {
         )
     }
 
+    /// Probe a leftover mount before reusing it. A mount whose backing store is gone
+    /// (unplugged drive, dropped network share) can block directory reads
+    /// indefinitely, so list it in a separate process that the timeout can kill
+    /// instead of reading it directly on the main actor.
+    private func isMountPointReadable(_ mountPoint: String, timeout: TimeInterval = 5) async -> Bool {
+        do {
+            let result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/bin/ls"),
+                arguments: [mountPoint],
+                timeout: timeout
+            )
+            return !result.timedOut && result.exitStatus == 0
+        } catch {
+            diagnostic("Could not probe existing mount \(mountPoint): \(error)")
+            return false
+        }
+    }
+
     /// Ask DiskImageMounter to open the encrypted image, then watch for the mounted
     /// volume. This lets macOS use a saved Keychain passphrase or show its own
     /// password prompt without EasyDMG ever showing a competing prompt.
@@ -2024,7 +2054,38 @@ class DMGProcessor: ObservableObject {
             switch result {
             case .mounted, .passwordProtected:
                 return result
-            case .failed:
+            case let .failed(exitStatus):
+                // A leftover attachment of this exact image (a prior run, Finder,
+                // Quick Look) makes a fresh attach fail with "Resource busy", and
+                // retrying can't clear it. Reuse that mount like the encrypted path
+                // does. If it's unreadable, retrying won't help either, so stop and
+                // let the caller fall back to manual.
+                if let existingMountPoint = await existingMountPoint(forDMGPath: path, dmgName: dmgName) {
+                    guard await isMountPointReadable(existingMountPoint) else {
+                        diagnostic("DMG already mounted at \(existingMountPoint) but it is unreadable; not reusing")
+                        support(
+                            event: "mount_reuse",
+                            details: [
+                                "dmg": dmgName,
+                                "attempt": String(attempt),
+                                "result": "unreadable",
+                                "volume": volumeName(from: existingMountPoint),
+                            ]
+                        )
+                        return result
+                    }
+                    diagnostic("DMG already mounted at \(existingMountPoint); reusing existing mount")
+                    support(
+                        event: "mount_reuse",
+                        details: [
+                            "dmg": dmgName,
+                            "attempt": String(attempt),
+                            "result": "already_mounted",
+                            "volume": volumeName(from: existingMountPoint),
+                        ]
+                    )
+                    return .mounted(mountPoint: existingMountPoint, exitStatus: exitStatus ?? -1)
+                }
                 guard !outcome.timedOut, attempt < maxAttempts else {
                     return result
                 }
@@ -3246,7 +3307,13 @@ class DMGProcessor: ObservableObject {
         return nil
     }
 
-    private func installApp(from appPath: String, mountPoint: String, dmgPath: String, dmgName: String) async {
+    private func installApp(
+        from appPath: String,
+        mountPoint: String,
+        dmgPath: String,
+        dmgName: String,
+        preserveMountOnCancel: Bool
+    ) async {
         let resolvedAppName = appName(from: appPath)
         var shouldReplaceExistingApp = false
 
@@ -3303,7 +3370,12 @@ class DMGProcessor: ObservableObject {
                 outcome: "canceled",
                 details: ["app": resolvedAppName, "reason": reason]
             )
-            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+            await cleanUpCanceledInstall(
+                mountPoint: mountPoint,
+                dmgPath: dmgPath,
+                dmgName: dmgName,
+                preserveMount: preserveMountOnCancel
+            )
             ProgressWindowController.shared.hide()
             return
         }
@@ -3350,10 +3422,11 @@ class DMGProcessor: ObservableObject {
                     event: "install_decision",
                     details: ["action": "cancel", "app": resolvedAppName, "dmg": dmgName]
                 )
-                await unmountAndKeepDMG(
+                await cleanUpCanceledInstall(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
-                    dmgName: dmgName
+                    dmgName: dmgName,
+                    preserveMount: preserveMountOnCancel
                 )
 
                 ProgressWindowController.shared.hide()
@@ -3388,10 +3461,11 @@ class DMGProcessor: ObservableObject {
             )
             if !canProceed {
                 diagnostic("Installation canceled at running-app prompt for \(resolvedAppName)")
-                await unmountAndKeepDMG(
+                await cleanUpCanceledInstall(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
-                    dmgName: dmgName
+                    dmgName: dmgName,
+                    preserveMount: preserveMountOnCancel
                 )
 
                 ProgressWindowController.shared.hide()
@@ -3418,10 +3492,11 @@ class DMGProcessor: ObservableObject {
             )
             if case let .blocked(reason) = modificationPreflight {
                 diagnostic("Installation canceled before replacing \(resolvedAppName): \(reason)")
-                await unmountAndKeepDMG(
+                await cleanUpCanceledInstall(
                     mountPoint: mountPoint,
                     dmgPath: dmgPath,
-                    dmgName: dmgName
+                    dmgName: dmgName,
+                    preserveMount: preserveMountOnCancel
                 )
 
                 ProgressWindowController.shared.hide()
@@ -3521,7 +3596,12 @@ class DMGProcessor: ObservableObject {
             case .cancel:
                 cleanupStagedAppIfNeeded(at: stagedURL)
                 showProgress("Installation canceled", progress: 0.3)
-                _ = await unmountDMG(at: mountPoint, dmgName: dmgName, progress: 0.3)
+                await cleanUpCanceledInstall(
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath,
+                    dmgName: dmgName,
+                    preserveMount: preserveMountOnCancel
+                )
                 ProgressWindowController.shared.hide()
                 var completionDetails = quarantineDetails
                 completionDetails["reason"] = "security_assessment_canceled"
@@ -4442,13 +4522,18 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    /// Canceled installs always keep the DMG, regardless of the auto-trash setting.
-    private func unmountAndKeepDMG(
+    /// Keep the DMG on cancellation, and only eject volumes we opened ourselves.
+    private func cleanUpCanceledInstall(
         mountPoint: String,
         dmgPath: String,
-        dmgName: String
+        dmgName: String,
+        preserveMount: Bool
     ) async {
-        _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+        if preserveMount {
+            diagnostic("Installation canceled; leaving pre-existing mount open at \(mountPoint)")
+        } else {
+            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+        }
         _ = trashDMGIfNeeded(at: dmgPath, shouldTrash: false, dmgName: dmgName)
     }
 
