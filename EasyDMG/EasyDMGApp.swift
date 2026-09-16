@@ -38,11 +38,23 @@ struct EasyDMGApp: App {
 @MainActor
 private final class SparklePresentationDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     var focusPresentedUpdate: (() -> Void)?
+    var updateCycleDidFinish: (() -> Void)?
+    private(set) var isPresentingUpdate = false
 
     private var userStartedInstall = false
 
     func standardUserDriverAllowsMinimizableStatusWindow() -> Bool {
         false
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        // Keep the app alive through download and installation, including the
+        // gaps where Sparkle replaces one window with another.
+        isPresentingUpdate = true
     }
 
     func updater(
@@ -75,6 +87,8 @@ private final class SparklePresentationDelegate: NSObject, SPUUpdaterDelegate, S
         error: Error?
     ) {
         userStartedInstall = false
+        isPresentingUpdate = false
+        updateCycleDidFinish?()
     }
 
     private func refocusUpdateUI() {
@@ -135,6 +149,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         }
 
         super.init()
+
+        presentationDelegate.updateCycleDidFinish = { [weak self] in
+            // Let Sparkle finish its callback and window cleanup before quitting.
+            DispatchQueue.main.async { [weak self] in
+                self?.retryQuitAfterUpdateIfNeeded()
+            }
+        }
     }
 
     // Expose updater for settings UI
@@ -339,10 +360,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                 // A fast manual handoff (such as a license agreement) can finish
                 // before this wait expires. If so, the queue already asked to quit
                 // and there will be no later processing event to ask again.
-                if self.launchedWithFiles && !self.dmgProcessor.isProcessing {
-                    self.diagnostic("✅ Processing already complete, retrying deferred quit")
-                    self.handleQueueDrained()
-                }
+                self.retryQuitAfterUpdateIfNeeded()
             }
         } else {
             diagnostic("ℹ️ Skipping update check (checked recently)")
@@ -428,6 +446,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         settingsWindow?.orderOut(nil)
     }
 
+    private func retryQuitAfterUpdateIfNeeded() {
+        guard launchedWithFiles, !dmgProcessor.isProcessing else { return }
+        handleQueueDrained()
+    }
+
     /// Called when the DMG queue empties. Quits as usual, unless the user still has
     /// the settings window open - then the install just hands control back to them.
     private func handleQueueDrained() {
@@ -436,6 +459,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         let settingsWindowIsOpen = settingsWindow.map { $0.isVisible || $0.isMiniaturized } == true
 
         guard isSettingsSession && settingsWindowIsOpen else {
+            // Guard automatic quits only. Sparkle must still be able to terminate
+            // the app itself when it is ready to install and relaunch.
+            guard !updaterPresentationDelegate.isPresentingUpdate else {
+                diagnostic("⏳ Processing queue complete, deferring quit until the presented update finishes")
+                support(event: "queue_complete", details: ["action": "defer_quit", "reason": "update_presentation"])
+                return
+            }
+
             guard !isWaitingForUpdateCheck else {
                 diagnostic("⏳ Processing queue complete, deferring quit until update check wait ends")
                 support(event: "queue_complete", details: ["action": "defer_quit", "reason": "update_check"])
