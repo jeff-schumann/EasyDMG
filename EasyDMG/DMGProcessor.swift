@@ -2657,6 +2657,76 @@ class DMGProcessor: ObservableObject {
         return freeSpace > neededSpace ? nil : neededSpace - freeSpace + 1
     }
 
+    private func notEnoughSpaceMessage(shortfall: UInt64) -> String {
+        "Free up \(ByteCountFormatter.string(fromByteCount: Int64(shortfall), countStyle: .file)) on your Mac, then try again."
+    }
+
+    private struct ExplainedCopyFailure {
+        let reason: String
+        let title: String
+        let message: String
+    }
+
+    /// Explains a copy failure only when the cause can be confirmed by looking at
+    /// the situation directly, not guessed from an error code. Anything else returns
+    /// nil and keeps the manual handoff.
+    private func explainCopyFailure(
+        _ error: Error,
+        appPath: String,
+        mountPoint: String,
+        installDirectory: URL,
+        appSize: UInt64
+    ) -> ExplainedCopyFailure? {
+        let fileManager = FileManager.default
+
+        // The disk image was ejected, or the drive holding the install folder was
+        // unplugged, while the copy was running.
+        if !fileManager.fileExists(atPath: mountPoint)
+            || !fileManager.fileExists(atPath: appPath)
+            || !fileManager.fileExists(atPath: installDirectory.path) {
+            return ExplainedCopyFailure(
+                reason: "source_or_destination_disconnected",
+                title: "Install Interrupted",
+                message: "Something was disconnected. Open the DMG again to retry."
+            )
+        }
+
+        // Disk-full is a documented error, but confirm with a fresh space check so the
+        // message can say how much to free up. If space has since freed up, stay generic.
+        if isOutOfSpaceError(error),
+           let shortfall = diskSpaceShortfall(requiredBytes: appSize, in: installDirectory) {
+            return ExplainedCopyFailure(
+                reason: "insufficient_disk_space",
+                title: "Not Enough Space",
+                message: notEnoughSpaceMessage(shortfall: shortfall)
+            )
+        }
+
+        if InstallLocation.hasIncompatibleMacAppFileSystem(installDirectory) {
+            let driveName = (try? installDirectory.resourceValues(forKeys: [.volumeLocalizedNameKey]))?
+                .volumeLocalizedName ?? "This drive"
+            return ExplainedCopyFailure(
+                reason: "incompatible_drive_format",
+                title: "Can't Install to Drive",
+                message: "\(driveName) can't store Mac apps. Choose another install folder in EasyDMG Settings."
+            )
+        }
+
+        return nil
+    }
+
+    /// macOS often wraps the real cause inside a generic write error, so check the
+    /// wrapped errors too.
+    private func isOutOfSpaceError(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        while let nsError = current {
+            if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileWriteOutOfSpaceError { return true }
+            if nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOSPC) { return true }
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
+    }
+
     private func validateInstallDirectory(
         _ directory: URL,
         createUserApplicationsIfMissing: Bool = true
@@ -3556,9 +3626,14 @@ class DMGProcessor: ObservableObject {
             )
             await handleError(
                 title: "Not Enough Space",
-                message: "Free up \(ByteCountFormatter.string(fromByteCount: Int64(shortfall), countStyle: .file)) on your Mac, then try again."
+                message: notEnoughSpaceMessage(shortfall: shortfall)
             )
-            _ = await unmountDMG(at: mountPoint, dmgName: dmgName)
+            await cleanUpCanceledInstall(
+                mountPoint: mountPoint,
+                dmgPath: dmgPath,
+                dmgName: dmgName,
+                preserveMount: preserveMountOnCancel
+            )
             return
         }
 
@@ -3672,6 +3747,44 @@ class DMGProcessor: ObservableObject {
         } catch {
             diagnostic("Installation failed while copying/replacing: \(error)")
             cleanupStagedAppIfNeeded(at: stagedURL)
+
+            // Causes we can confirm directly end the install with a specific message:
+            // a manual drag would fail the same way, so handing off would only
+            // postpone the failure.
+            if let explained = explainCopyFailure(
+                error,
+                appPath: appPath,
+                mountPoint: mountPoint,
+                installDirectory: installDirectory,
+                appSize: appSize
+            ) {
+                diagnostic("Installation failure explained: \(explained.reason)")
+                support(
+                    event: "install_result",
+                    details: errorDetails(error).merging([
+                        "app": resolvedAppName,
+                        "dmg": dmgName,
+                        "reason": explained.reason,
+                        "result": "failed"
+                    ]) { _, new in new }
+                )
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "error",
+                    details: ["app": resolvedAppName, "reason": explained.reason]
+                )
+                await handleError(title: explained.title, message: explained.message)
+                // An ejected volume has nothing left to unmount.
+                await cleanUpCanceledInstall(
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath,
+                    dmgName: dmgName,
+                    preserveMount: preserveMountOnCancel
+                        || !FileManager.default.fileExists(atPath: mountPoint)
+                )
+                return
+            }
+
             // Outside /Applications a permission error isn't App Management, so don't
             // send the user to a Privacy setting that wouldn't change anything.
             let permissionDenied = isAppManagementError(error)
