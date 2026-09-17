@@ -149,6 +149,7 @@ fileprivate struct AppManagementProbeResult {
     let granted: Bool
     let errorDomain: String?
     let errorCode: Int?
+    let posixErrorCode: Int?
     let target: AppPermissionTargetDiagnostics
 
     static func granted(target: AppPermissionTargetDiagnostics) -> AppManagementProbeResult {
@@ -156,6 +157,7 @@ fileprivate struct AppManagementProbeResult {
             granted: true,
             errorDomain: nil,
             errorCode: nil,
+            posixErrorCode: nil,
             target: target
         )
     }
@@ -165,6 +167,7 @@ fileprivate struct AppManagementProbeResult {
             granted: false,
             errorDomain: error.domain,
             errorCode: error.code,
+            posixErrorCode: posixCode(in: error),
             target: target
         )
     }
@@ -187,11 +190,23 @@ fileprivate struct AppManagementProbeResult {
         return details
     }
 
+    private static func posixCode(in error: NSError) -> Int? {
+        if error.domain == NSPOSIXErrorDomain { return error.code }
+        guard let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError else { return nil }
+        return posixCode(in: underlying)
+    }
+
+    // EPERM on an otherwise writable, user-owned bundle is consistent with TCC.
+    // Cocoa's generic permission error alone cannot distinguish TCC from filesystem access.
+    var isLikelyAppManagementDenial: Bool {
+        !granted && posixErrorCode == Int(EPERM)
+            && target.ownerID == Int(geteuid())
+            && !target.isRootOwned && !target.hasAppStoreMarkers
+            && (target.posixPermissions.map { $0 & 0o200 != 0 } ?? false)
+    }
+
     var retryFailureMessage: String {
-        if target.probableRestriction == "root_owned" {
-            return "Still blocked. This app is root-owned; App Management may not be enough."
-        }
-        return "Still waiting for permission. Enable EasyDMG in System Settings, then try again."
+        "Still waiting for permission. Enable EasyDMG in System Settings, then try again."
     }
 }
 
@@ -354,6 +369,9 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
         if probe.granted {
             markPermissionReady(reason: reason)
             return true
+        } else if !probe.isLikelyAppManagementDenial {
+            // Re-enter preflight so a changed target or unrelated failure uses normal recovery.
+            finish(.retry)
         } else if isPermissionReady {
             isPermissionReady = false
             statusLabel.stringValue = "Waiting for App Management permission."
@@ -539,6 +557,8 @@ fileprivate final class AppManagementPermissionWindowController: NSWindowControl
         let probe = permissionProbe()
         if probe.granted {
             markPermissionReady(reason: "try_again")
+            finish(.retry)
+        } else if !probe.isLikelyAppManagementDenial {
             finish(.retry)
         } else {
             statusLabel.stringValue = probe.retryFailureMessage
@@ -3561,6 +3581,36 @@ class DMGProcessor: ObservableObject {
             }
         }
 
+        // Resolve replacement safeguards and access before asking the user to quit.
+        // App Store protection applies in every folder; TCC probing is limited below.
+        if shouldReplaceExistingApp {
+            let modificationPreflight = await ensureAppManagementPermission(
+                forExistingAppAt: destinationPath,
+                appName: resolvedAppName,
+                dmgName: dmgName
+            )
+            if case let .blocked(reason) = modificationPreflight {
+                diagnostic("Installation canceled before replacing \(resolvedAppName): \(reason)")
+                await cleanUpCanceledInstall(
+                    mountPoint: mountPoint,
+                    dmgPath: dmgPath,
+                    dmgName: dmgName,
+                    preserveMount: preserveMountOnCancel
+                )
+
+                ProgressWindowController.shared.hide()
+                recordCompletion(
+                    dmgName: dmgName,
+                    outcome: "skipped",
+                    details: [
+                        "app": resolvedAppName,
+                        "reason": reason
+                    ]
+                )
+                return
+            }
+        }
+
         // Quit any running instance before installing — otherwise the OS keeps the running
         // process bound to the old bundle and "Open after install" activates the stale copy.
         let affectedBundleIDs = Set([
@@ -3590,37 +3640,6 @@ class DMGProcessor: ObservableObject {
                     details: [
                         "app": resolvedAppName,
                         "reason": "running_app_canceled"
-                    ]
-                )
-                return
-            }
-        }
-
-        // Pre-flight App Management TCC check before modifying an existing app bundle —
-        // without this permission, replacing an app in /Applications fails mid-install and
-        // the user just sees a generic "install failed". Probe non-destructively first.
-        if shouldReplaceExistingApp && requiresAppManagementPermission(for: targetDirectory) {
-            let modificationPreflight = await ensureAppManagementPermission(
-                forExistingAppAt: destinationPath,
-                appName: resolvedAppName,
-                dmgName: dmgName
-            )
-            if case let .blocked(reason) = modificationPreflight {
-                diagnostic("Installation canceled before replacing \(resolvedAppName): \(reason)")
-                await cleanUpCanceledInstall(
-                    mountPoint: mountPoint,
-                    dmgPath: dmgPath,
-                    dmgName: dmgName,
-                    preserveMount: preserveMountOnCancel
-                )
-
-                ProgressWindowController.shared.hide()
-                recordCompletion(
-                    dmgName: dmgName,
-                    outcome: "skipped",
-                    details: [
-                        "app": resolvedAppName,
-                        "reason": reason
                     ]
                 )
                 return
@@ -3810,9 +3829,12 @@ class DMGProcessor: ObservableObject {
 
             // Outside /Applications a permission error isn't App Management, so don't
             // send the user to a Privacy setting that wouldn't change anything.
-            let permissionDenied = isAppManagementError(error)
+            let targetProbe = shouldReplaceExistingApp
+                && FileManager.default.fileExists(atPath: destinationPath)
                 && requiresAppManagementPermission(for: targetDirectory)
-            let targetProbe = permissionDenied ? canModifyExistingApp(at: destinationPath) : nil
+                && isAppManagementError(error)
+                ? canModifyExistingApp(at: destinationPath) : nil
+            let permissionDenied = targetProbe?.isLikelyAppManagementDenial == true
             let failureReason = targetProbe?.target.automaticReplacementBlockReason
                 ?? (permissionDenied ? "app_management_denied" : "copy_or_replace_failed")
             var failureDetails = errorDetails(error).merging([
@@ -3854,7 +3876,7 @@ class DMGProcessor: ObservableObject {
             var fallbackDetails = failureDetails
             fallbackDetails.removeValue(forKey: "result")
             let fallbackReason: ManualFallbackReason
-            if targetProbe?.target.probableRestriction == "root_owned" {
+            if let targetProbe, !targetProbe.granted, targetProbe.target.isRootOwned {
                 fallbackReason = .rootOwnedReplacementDenied
             } else {
                 fallbackReason = permissionDenied ? .appManagementDenied : .copyFailed
@@ -4476,7 +4498,7 @@ class DMGProcessor: ObservableObject {
             alert.informativeText = """
             \(appName.strippingAppSuffix) is managed by the App Store, and macOS doesn't let EasyDMG replace App Store apps.
 
-            To install this version, move \(appName.strippingAppSuffix) from your Applications folder to the Trash to uninstall, then open the DMG again.
+            To install this version, move the installed copy of \(appName.strippingAppSuffix) to the Trash to uninstall, then open the DMG again.
             """
             alert.icon = AlertIcon.image
             alert.addButton(withTitle: "Show in Finder")
@@ -4510,6 +4532,19 @@ class DMGProcessor: ObservableObject {
         dmgName: String
     ) async -> ExistingAppModificationPreflightResult {
         while true {
+            let target = appPermissionTargetDiagnostics(at: path)
+            if let reason = target.automaticReplacementBlockReason {
+                await showManagedAppReplacementBlockedDialog(
+                    appName: appName,
+                    dmgName: dmgName,
+                    target: target
+                )
+                return .blocked(reason: reason)
+            }
+            guard requiresAppManagementPermission(for: URL(fileURLWithPath: path).deletingLastPathComponent()) else {
+                return .allowed
+            }
+
             let probe = canModifyExistingApp(at: path)
             if probe.granted {
                 var grantedDetails = ["app": appName, "dmg": dmgName, "result": "granted"]
@@ -4533,6 +4568,14 @@ class DMGProcessor: ObservableObject {
                     target: probe.target
                 )
                 return .blocked(reason: reason)
+            }
+
+            // The probe only tests a metadata write, not the actual replacement swap.
+            // Anything other than a likely TCC denial gets a real attempt; if that
+            // fails, the copy-failure handler already picks the right manual fallback.
+            guard probe.isLikelyAppManagementDenial else {
+                diagnostic("App Management probe inconclusive for \(appName); attempting replacement anyway")
+                return .allowed
             }
 
             showProgress("Waiting for App Management permission...", progress: 0.2)
