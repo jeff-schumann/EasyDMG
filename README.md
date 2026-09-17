@@ -39,6 +39,7 @@ Yes. You choose whether EasyDMG is your default DMG handler, and you can open an
 - **It's EASY!**: Set EasyDMG as your default DMG handler and forget about it. 
 - **It's simple**: The app only runs when opening a DMG. It doesn't take up space in your dock or menu bar, it's gone until you need it
 - **It's native**: Built with Swift for MacOS, it's quick and seamless
+- **Update apps where you keep them**: EasyDMG finds registered copies inside your chosen install folder, including subfolders and renamed apps, and updates them in place. Copies outside that folder are left alone. If several copies match, EasyDMG asks before replacing the default copy; if that default is elsewhere, it checks the original filename instead. Apps that require `/Applications` still install directly there.
 - **Flexible settings**: Choose installation preferences that match your workflow
 - **Save disk space**: Move DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
 - **Cautious by default**: Designed to make installation easy while staying safe. When ambiguity arises, if EasyDMG can handle it safely (such as retrying passwords or evaluating licenses), it does; otherwise, it gracefully falls back to manual installation.

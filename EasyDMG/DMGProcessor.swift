@@ -2772,7 +2772,7 @@ class DMGProcessor: ObservableObject {
     /// TCC's App Management gate only gets in the way for apps in /Applications.
     /// Replacing a bundle in a user-owned folder needs no special permission.
     private func requiresAppManagementPermission(for directory: URL) -> Bool {
-        directory.standardizedFileURL.path == InstallLocation.systemDirectory.path
+        ExistingAppDiscovery.isWithin(directory, root: InstallLocation.systemDirectory)
     }
 
     private func resolvedInstallLocation(for directory: URL) -> InstallLocation {
@@ -3472,9 +3472,25 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        let destinationURL = installDirectory.appendingPathComponent(resolvedAppName)
+        let discovery = ExistingAppDiscovery().select(
+            incoming: URL(fileURLWithPath: appPath),
+            directory: installDirectory,
+            exactName: resolvedAppName,
+            requiresSystemLocation: locationMarkers.contains(.systemExtension)
+        )
+        let destinationURL = discovery.target
         let destinationPath = destinationURL.path
-        let stagedURL = stagedAppURL(for: resolvedAppName, in: installDirectory)
+        let targetDirectory = destinationURL.deletingLastPathComponent()
+        let stagedURL = stagedAppURL(for: resolvedAppName, in: targetDirectory)
+        diagnostic("Existing app discovery: root=\(discovery.searchRoot.path), candidates=\(discovery.candidates.map(\.path)), target=\(destinationPath), reason=\(discovery.reason)")
+        support(event: "existing_app_discovery", details: [
+            "app": resolvedAppName,
+            "dmg": dmgName,
+            "search_root": discovery.searchRoot.path,
+            "candidates": discovery.candidates.map(\.path).joined(separator: "\n"),
+            "target": destinationPath,
+            "reason": discovery.reason
+        ])
 
         if FileManager.default.fileExists(atPath: destinationPath) {
             diagnostic("Destination app already exists: \(destinationPath)")
@@ -3487,7 +3503,8 @@ class DMGProcessor: ObservableObject {
             )
 
             let shouldReplace: Bool
-            if versionComparison == .newer && UserPreferences.shared.autoInstallNewerVersions {
+            if versionComparison == .newer && UserPreferences.shared.autoInstallNewerVersions
+                && !discovery.requiresConfirmation {
                 diagnostic("Auto-installing newer version of \(resolvedAppName): v\(installedVersion ?? "?") -> v\(newVersion ?? "?")")
                 support(
                     event: "auto_install_newer",
@@ -3504,7 +3521,8 @@ class DMGProcessor: ObservableObject {
                     appName: resolvedAppName,
                     installedVersion: installedVersion,
                     newVersion: newVersion,
-                    installDirectory: installDirectory
+                    installDirectory: installDirectory,
+                    relativeLocation: discovery.relativeLocation == resolvedAppName ? nil : discovery.relativeLocation
                 )
             }
 
@@ -3545,11 +3563,16 @@ class DMGProcessor: ObservableObject {
 
         // Quit any running instance before installing — otherwise the OS keeps the running
         // process bound to the old bundle and "Open after install" activates the stale copy.
-        if let bundleID = bundleIdentifier(at: appPath) {
+        let affectedBundleIDs = Set([
+            bundleIdentifier(at: appPath),
+            shouldReplaceExistingApp ? bundleIdentifier(at: destinationPath) : nil
+        ].compactMap { $0 }).sorted()
+        for bundleID in affectedBundleIDs {
             let canProceed = await quitIfRunning(
                 appName: resolvedAppName,
                 bundleID: bundleID,
-                dmgName: dmgName
+                dmgName: dmgName,
+                targetURL: shouldReplaceExistingApp ? destinationURL : nil
             )
             if !canProceed {
                 diagnostic("Installation canceled at running-app prompt for \(resolvedAppName)")
@@ -3576,7 +3599,7 @@ class DMGProcessor: ObservableObject {
         // Pre-flight App Management TCC check before modifying an existing app bundle —
         // without this permission, replacing an app in /Applications fails mid-install and
         // the user just sees a generic "install failed". Probe non-destructively first.
-        if shouldReplaceExistingApp && requiresAppManagementPermission(for: installDirectory) {
+        if shouldReplaceExistingApp && requiresAppManagementPermission(for: targetDirectory) {
             let modificationPreflight = await ensureAppManagementPermission(
                 forExistingAppAt: destinationPath,
                 appName: resolvedAppName,
@@ -3606,7 +3629,7 @@ class DMGProcessor: ObservableObject {
 
         showProgress("Checking disk space...", progress: 0.15)
         let appSize = calculateAppSize(at: appPath)
-        if let shortfall = diskSpaceShortfall(requiredBytes: appSize, in: installDirectory) {
+        if let shortfall = diskSpaceShortfall(requiredBytes: appSize, in: targetDirectory) {
             diagnostic("Insufficient disk space for app size \(appSize), short by \(shortfall) bytes")
             support(
                 event: "install_result",
@@ -3755,7 +3778,7 @@ class DMGProcessor: ObservableObject {
                 error,
                 appPath: appPath,
                 mountPoint: mountPoint,
-                installDirectory: installDirectory,
+                installDirectory: targetDirectory,
                 appSize: appSize
             ) {
                 diagnostic("Installation failure explained: \(explained.reason)")
@@ -3788,7 +3811,7 @@ class DMGProcessor: ObservableObject {
             // Outside /Applications a permission error isn't App Management, so don't
             // send the user to a Privacy setting that wouldn't change anything.
             let permissionDenied = isAppManagementError(error)
-                && requiresAppManagementPermission(for: installDirectory)
+                && requiresAppManagementPermission(for: targetDirectory)
             let targetProbe = permissionDenied ? canModifyExistingApp(at: destinationPath) : nil
             let failureReason = targetProbe?.target.automaticReplacementBlockReason
                 ?? (permissionDenied ? "app_management_denied" : "copy_or_replace_failed")
@@ -3877,6 +3900,7 @@ class DMGProcessor: ObservableObject {
             outcome: "installed",
             details: [
                 "app": resolvedAppName,
+                "installed_path": destinationPath,
                 "opened_app": boolString(didOpenApp),
                 "trashed_dmg": boolString(didTrashDMG)
             ]
@@ -3887,11 +3911,12 @@ class DMGProcessor: ObservableObject {
         appName: String,
         installedVersion: String?,
         newVersion: String?,
-        installDirectory: URL
+        installDirectory: URL,
+        relativeLocation: String?
     ) async -> Bool {
         let displayName = appName.strippingAppSuffix
         let locationDescription = installDirectory.abbreviatedPath
-        let informative: String
+        var informative: String
         let comparison = replacementVersionComparison(
             installedVersion: installedVersion,
             newVersion: newVersion
@@ -3928,12 +3953,17 @@ class DMGProcessor: ObservableObject {
             informative = "\(displayName) is already installed in\n\(locationDescription)."
         }
 
+        if let relativeLocation {
+            informative += "\n\nCopy to replace: \(relativeLocation)"
+        }
+        let dialogText = informative
+
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
                 alert.messageText = "Replace \(displayName)?"
-                alert.informativeText = informative
+                alert.informativeText = dialogText
 
                 alert.icon = AlertIcon.image
 
@@ -4194,8 +4224,15 @@ class DMGProcessor: ObservableObject {
         }
     }
 
-    private func quitIfRunning(appName: String, bundleID: String, dmgName: String) async -> Bool {
-        var instances = runningInstances(of: bundleID)
+    private func quitIfRunning(appName: String, bundleID: String, dmgName: String, targetURL: URL?) async -> Bool {
+        func affectedInstances() -> [NSRunningApplication] {
+            runningInstances(of: bundleID).filter { app in
+                guard let targetURL else { return true }
+                guard let bundleURL = app.bundleURL else { return false }
+                return ExistingAppDiscovery.resolved(bundleURL) == ExistingAppDiscovery.resolved(targetURL)
+            }
+        }
+        var instances = affectedInstances()
 
         support(
             event: "running_instance_check",
@@ -4260,7 +4297,7 @@ class DMGProcessor: ObservableObject {
                 return false
             }
 
-            instances = runningInstances(of: bundleID)
+            instances = affectedInstances()
             if instances.isEmpty {
                 return true
             }
