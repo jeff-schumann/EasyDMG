@@ -9,6 +9,7 @@ import SwiftUI
 import AppKit
 import Combine
 import CoreServices
+import Darwin
 import Sparkle
 
 // MARK: - Tab Enum
@@ -628,6 +629,27 @@ private struct SettingGroupLabel: View {
 }
 
 private struct InstallLocationSection: View {
+    private enum Warning {
+        case couldNotCreateFolder
+        case notWritable
+        case incompatibleDriveFormat
+
+        var message: String {
+            switch self {
+            case .couldNotCreateFolder:
+                return "EasyDMG couldn't create this folder, so installs will fail. Your disk may be full, or your home folder may not allow changes."
+            case .notWritable:
+                return "This folder isn't writable by your account, so installs will fail. That usually means the account isn't an administrator."
+            case .incompatibleDriveFormat:
+                return "This drive's format can't reliably store Mac apps. Some apps may fail to install or open. Choose a folder on an APFS or Mac OS Extended drive."
+            }
+        }
+
+        var offersPersonalFolder: Bool {
+            self != .incompatibleDriveFormat
+        }
+    }
+
     @ObservedObject var preferences: UserPreferences
     let theme: SettingsTheme
 
@@ -648,20 +670,21 @@ private struct InstallLocationSection: View {
         return InstallLocation.isWritable(directory)
     }
 
-    private var canOfferUserFolder: Bool {
-        preferences.installLocation != .userApplications
-    }
-
-    /// The blocker to show in place of the description, if there is one. A failed
+    /// The warning to show in place of the description, if there is one. A failed
     /// creation wins: it is the more specific answer, and it is what the user just
     /// asked for by clicking the path.
-    private var warningMessage: String? {
+    private var warning: Warning? {
         if couldNotCreateFolder {
-            return "EasyDMG couldn't create this folder, so installs will fail. Your disk may be full, or your home folder may not allow changes."
+            return .couldNotCreateFolder
         }
 
         if !isWritable {
-            return "This folder isn't writable by your account, so installs will fail. That usually means the account isn't an administrator."
+            return .notWritable
+        }
+
+        if preferences.installLocation == .custom,
+           InstallLocation.hasIncompatibleMacAppFileSystem(directory) {
+            return .incompatibleDriveFormat
         }
 
         return nil
@@ -723,11 +746,11 @@ private struct InstallLocationSection: View {
             .padding(.top, 1)
 
             // The neutral description gives way to the warning: someone who has just
-            // been told installs will fail here has no use for "apps go in a folder
-            // you pick", and dropping it keeps this group to three stacked blocks.
-            if let warning = warningMessage {
-                // A bordered callout rather than one more paragraph: this is a
-                // blocker, and the box stops it blending into the text above it.
+            // been told this destination is unreliable has no use for "apps go in a
+            // folder you pick", and dropping it keeps this group to three blocks.
+            if let warning {
+                // A bordered callout rather than one more paragraph: the box stops
+                // an important destination problem blending into the text above it.
                 // The path stays out of the sentence — it is on the row directly
                 // above, and repeating it twice in 40pt was most of the bulk.
                 HStack(alignment: .top, spacing: 8) {
@@ -736,7 +759,7 @@ private struct InstallLocationSection: View {
                         .foregroundStyle(SettingsPalette.warningText)
                         .padding(.top, 1)
 
-                    Text(warning)
+                    Text(warning.message)
                         .font(.system(size: 11.5))
                         .foregroundStyle(SettingsPalette.warningText)
                         .lineSpacing(2)
@@ -744,7 +767,8 @@ private struct InstallLocationSection: View {
 
                     Spacer(minLength: 8)
 
-                    if canOfferUserFolder {
+                    if warning.offersPersonalFolder,
+                       preferences.installLocation != .userApplications {
                         Button("Switch to Personal") {
                             selectLocation(.userApplications)
                         }
@@ -1111,6 +1135,34 @@ enum InstallLocation: String, CaseIterable, Identifiable, Hashable {
         }
 
         return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: directory.path)
+    }
+
+    /// Windows-formatted drives can be writable on macOS without reliably
+    /// preserving everything inside a Mac app bundle. Only warn for formats we
+    /// know are unsuitable; an unknown filesystem may be unusual but still valid.
+    static func hasIncompatibleMacAppFileSystem(_ directory: URL) -> Bool {
+        guard let values = try? directory.resourceValues(forKeys: [.volumeIsLocalKey]),
+              values.volumeIsLocal == true else {
+            return false
+        }
+
+        var fileSystem = statfs()
+        let result = directory.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return statfs(path, &fileSystem)
+        }
+        guard result == 0 else { return false }
+
+        let type = withUnsafePointer(to: &fileSystem.f_fstypename) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: Int(MFSNAMELEN)) {
+                String(cString: $0).lowercased()
+            }
+        }
+
+        return type == "exfat"
+            || type == "msdos"
+            || type == "msdosfs"
+            || type.contains("ntfs")
     }
 
     /// The location that will actually work on this Mac. Supplies the first-run default.
