@@ -43,19 +43,23 @@ EasyDMG also does not operate its own backend service for user tracking, analyti
 
 ## Local Logs
 
-EasyDMG keeps a local support log on your Mac at `~/Library/Logs/EasyDMG/support.log`. This support log is enabled by default and is intended to help explain how EasyDMG handled a DMG, such as whether mounting succeeded, whether an install completed, or why EasyDMG fell back to manual mode.
+EasyDMG keeps a local activity log on your Mac at `~/Library/Logs/EasyDMG/easydmg.log`. This log is always on and is intended to help explain how EasyDMG handled a DMG, such as whether mounting succeeded, whether an install completed, or why EasyDMG fell back to manual mode. When the log grows large, the older portion is kept at `~/Library/Logs/EasyDMG/easydmg.previous.log`.
 
-By default, the support log is designed to avoid recording full file paths or raw command output. It may include details such as:
+The log may include details such as:
 
 - EasyDMG version and build
-- DMG file names
+- DMG file names and their full file paths on your Mac
 - app names discovered inside a DMG
+- mount locations and install folder paths
 - install, mount, unmount, and trash outcomes
 - fallback reason codes such as multiple apps found or password-protected DMG
+- error messages from macOS tools EasyDMG uses, such as `hdiutil`
 
-EasyDMG also supports an optional verbose diagnostic log at `~/Library/Logs/EasyDMG/diagnostic.log`. Verbose diagnostics are off by default and must be explicitly enabled, for example when troubleshooting a bug. When enabled, the diagnostic log may include more detailed local information such as file paths, mount points, or compacted command output.
+The log never includes DMG passwords.
 
-All of these logs stay on your device unless you choose to share them yourself, for example when reporting a bug.
+Earlier versions of EasyDMG wrote separate `support.log` and `diagnostic.log` files. EasyDMG removes those older files automatically on launch.
+
+This log stays on your device unless you choose to share them yourself, for example when reporting a bug.
 
 ## Notifications
 

@@ -16,10 +16,23 @@ After setting EasyDMG as your default app for opening DMGs, opening any DMG will
 
 1. Mount the DMG
 2. Perform macOS security check
-3. Install the app to /Applications
+3. Install the app to your Applications folder (or a folder you choose)
 4. Open the app directly, or open Finder and highlight the app
 5. Unmount the DMG
-6. Trash the DMG
+6. Trash the DMG (optional)
+
+## Common Questions
+
+**Is it safe?**
+EasyDMG runs the same Gatekeeper check macOS uses when you open a new app. Apps from verified developers install normally. Apps from unidentified developers get a warning first. Apps macOS flags as malware, damaged, or revoked are never installed automatically. EasyDMG doesn't turn off or get around any of macOS's built-in protections.
+
+Tired of the unidentified-developer warning? Turn it off in Settings. The macOS security check still runs on every install, and apps flagged as unsafe are still blocked. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
+
+**What if a DMG isn't a simple drag-and-drop?**
+EasyDMG won't guess. If a DMG contains a license agreement, a .pkg installer, more than one app, or anything else unusual, it just opens the DMG so you can take it from there.
+
+**Am I still in control?**
+Yes. You choose whether EasyDMG is your default DMG handler, and you can open any DMG the usual way with right-click → Open With → DiskImageMounter. Where apps are installed and whether DMGs go to the Trash are both up to you in Settings.
 
 ## Features
 
@@ -29,7 +42,7 @@ After setting EasyDMG as your default app for opening DMGs, opening any DMG will
 - **Flexible settings**: Choose installation preferences that match your workflow
 - **Save disk space**: Move DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
 - **Cautious by default**: Designed to make installation easy while staying safe. When ambiguity arises, if EasyDMG can handle it safely (such as retrying passwords or evaluating licenses), it does; otherwise, it gracefully falls back to manual installation.
-- **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, the rest take one click, and you can disable the prompt entirely in Settings. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
+- **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, apps from unidentified developers take one click, and apps macOS flags as unsafe are never installed automatically. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 - **Automatic updates**: Built-in Sparkle integration for easy updates
 - **It's fun**: The wizard hamster updates you on his silly antics in the progress bar. Learn how to summon your own hamster wizard on the [website](https://easydmg.app/summon-a-wizard-hamster).
 
@@ -152,16 +165,4 @@ Or contribute by buying me a coffee! It fuels further development :)
 
 Found a bug? Have a feature request? [Open an issue](https://github.com/jeff-schumann/EasyDMG/issues).
 
-EasyDMG keeps a local support log at `~/Library/Logs/EasyDMG/support.log`. It stays on your Mac unless you choose to share it, and it can help explain why EasyDMG installed an app, skipped it, or fell back to manual mode.
-
-If support needs deeper troubleshooting, you can enable verbose diagnostics:
-
-```bash
-defaults write com.jeff.easydmg diagnosticLoggingEnabled -bool YES
-```
-
-Then reproduce the issue and check `~/Library/Logs/EasyDMG/diagnostic.log`. To turn verbose diagnostics back off:
-
-```bash
-defaults delete com.jeff.easydmg diagnosticLoggingEnabled
-```
+EasyDMG keeps a local activity log at `~/Library/Logs/EasyDMG/easydmg.log`. It stays on your Mac unless you choose to share it, and it can help explain why EasyDMG installed an app, skipped it, or fell back to manual mode. Attaching it to an issue is the fastest way to get help.
