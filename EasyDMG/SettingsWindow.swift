@@ -548,12 +548,20 @@ struct SettingsTabView: View {
                             theme: theme
                         )
 
-                        if preferences.feedbackMode == .notification,
+                        if preferences.feedbackMode == .silent {
+                            Toggle("Still notify me if installation fails", isOn: $preferences.notifyOnFailureInSilentMode)
+                                .toggleStyle(SettingsCheckboxStyle(theme: theme))
+                                .padding(.top, 4)
+                        }
+
+                        if preferences.feedbackMode == .notification
+                            || (preferences.feedbackMode == .silent && preferences.notifyOnFailureInSilentMode),
                            notificationPermissions.state.shouldShowFeedbackWarning {
                             NotificationFeedbackNotice(
                                 state: notificationPermissions.state,
                                 theme: theme,
-                                action: notificationPermissions.performPrimaryAction
+                                action: notificationPermissions.performPrimaryAction,
+                                failuresOnly: preferences.feedbackMode == .silent
                             )
                         }
                     }
@@ -608,7 +616,12 @@ struct SettingsTabView: View {
             notificationPermissions.refresh()
         }
         .onChange(of: preferences.feedbackMode) { mode in
-            if mode == .notification {
+            if mode == .notification || (mode == .silent && preferences.notifyOnFailureInSilentMode) {
+                notificationPermissions.prepareForNotificationFeedback()
+            }
+        }
+        .onChange(of: preferences.notifyOnFailureInSilentMode) { enabled in
+            if enabled && preferences.feedbackMode == .silent {
                 notificationPermissions.prepareForNotificationFeedback()
             }
         }
@@ -960,6 +973,7 @@ private struct NotificationFeedbackNotice: View {
     let state: NotificationPermissionState
     let theme: SettingsTheme
     let action: () -> Void
+    var failuresOnly = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -968,7 +982,9 @@ private struct NotificationFeedbackNotice: View {
                 .foregroundStyle(SettingsPalette.gold)
                 .padding(.top, 1)
 
-            Text(state.feedbackWarningText)
+            Text(failuresOnly
+                 ? "Allow notification banners or alerts in macOS to receive installation failure messages."
+                 : state.feedbackWarningText)
                 .font(.system(size: 11.5))
                 .foregroundStyle(theme.muted)
                 .lineSpacing(2)
@@ -1214,6 +1230,10 @@ class UserPreferences: ObservableObject {
         didSet { UserDefaults.standard.set(feedbackMode.rawValue, forKey: "feedbackMode") }
     }
 
+    @Published var notifyOnFailureInSilentMode: Bool {
+        didSet { UserDefaults.standard.set(notifyOnFailureInSilentMode, forKey: "notifyOnFailureInSilentMode") }
+    }
+
     /// When true, skip the Replace prompt when the DMG contains a newer version
     /// than the installed app. Opt-in via the in-dialog suppression checkbox.
     @Published var autoInstallNewerVersions: Bool {
@@ -1306,6 +1326,7 @@ class UserPreferences: ObservableObject {
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
+        self.notifyOnFailureInSilentMode = UserDefaults.standard.object(forKey: "notifyOnFailureInSilentMode") as? Bool ?? true
 
         // Use the same idempotent migration path even if something initializes
         // preferences before the app delegate runs the normal startup migrations.

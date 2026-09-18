@@ -592,6 +592,16 @@ class DMGProcessor: ObservableObject {
         case rootOwnedReplacementDenied = "root_owned_replacement_denied"
         case copyFailed = "copy_or_replace_failed"
 
+        var isInstallationFailure: Bool {
+            switch self {
+            case .genericMountFailure, .invalidAppBundle, .appManagementDenied,
+                 .rootOwnedReplacementDenied, .copyFailed:
+                return true
+            default:
+                return false
+            }
+        }
+
         func notificationTitle(appName: String) -> String {
             switch self {
             case .genericMountFailure:
@@ -1227,7 +1237,8 @@ class DMGProcessor: ObservableObject {
     }
 
     private func sendFailureNotificationIfAvailable(title: String, message: String) async {
-        guard UserPreferences.shared.feedbackMode != .silent else {
+        guard UserPreferences.shared.feedbackMode != .silent
+            || UserPreferences.shared.notifyOnFailureInSilentMode else {
             return
         }
 
@@ -1245,6 +1256,15 @@ class DMGProcessor: ObservableObject {
         appName: String? = nil,
         reason: ManualFallbackReason
     ) async {
+        if reason.isInstallationFailure {
+            let resolvedName = manualFallbackAppName(explicit: appName, dmgName: dmgName)
+            if let message = reason.notificationMessage(appName: resolvedName) {
+                await sendFailureNotificationIfAvailable(
+                    title: reason.notificationTitle(appName: resolvedName), message: message
+                )
+            }
+            return
+        }
         guard UserPreferences.shared.feedbackMode != .silent else {
             return
         }
@@ -1873,6 +1893,33 @@ class DMGProcessor: ObservableObject {
             fromInfoPlist: Data(result.standardOutput.utf8),
             matching: dmgPath
         )
+    }
+
+    /// Keep disk-image discovery off the main actor and stop waiting after five seconds.
+    /// An unavailable snapshot disables broad app matching for this install.
+    private func mountedImageRootsForDiscovery() async -> [URL]? {
+        do {
+            let result = try await runAssessmentProcess(
+                executableURL: URL(fileURLWithPath: "/usr/bin/hdiutil"),
+                arguments: ["info", "-plist"],
+                timeout: 5
+            )
+            guard !result.timedOut, result.exitStatus == 0,
+                  let plist = try? PropertyListSerialization.propertyList(
+                    from: Data(result.standardOutput.utf8), format: nil
+                  ),
+                  let info = plist as? [String: Any],
+                  let images = info["images"] as? [[String: Any]] else {
+                diagnostic("Mounted-image discovery unavailable; using original app filename")
+                return nil
+            }
+            return images.flatMap { $0["system-entities"] as? [[String: Any]] ?? [] }
+                .compactMap { $0["mount-point"] as? String }
+                .map { URL(fileURLWithPath: $0) }
+        } catch {
+            diagnostic("Could not list mounted images for app discovery: \(error)")
+            return nil
+        }
     }
 
     /// Probe a leftover mount before reusing it. A mount whose backing store is gone
@@ -3492,7 +3539,8 @@ class DMGProcessor: ObservableObject {
             return
         }
 
-        let discovery = ExistingAppDiscovery().select(
+        let imageRoots = await mountedImageRootsForDiscovery()
+        let discovery = ExistingAppDiscovery(mountedImageRoots: { imageRoots }).select(
             incoming: URL(fileURLWithPath: appPath),
             directory: installDirectory,
             exactName: resolvedAppName,

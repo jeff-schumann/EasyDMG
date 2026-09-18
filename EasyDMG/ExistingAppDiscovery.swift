@@ -20,24 +20,9 @@ struct ExistingAppDiscovery {
     var defaultApp: (String) -> URL? = {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
     }
-    var mountedImageRoots: () -> [URL] = {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-        process.arguments = ["info", "-plist"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return [] }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-              let info = plist as? [String: Any],
-              let images = info["images"] as? [[String: Any]] else { return [] }
-        return images.flatMap { $0["system-entities"] as? [[String: Any]] ?? [] }
-            .compactMap { $0["mount-point"] as? String }
-            .map { URL(fileURLWithPath: $0) }
-    }
+    // The caller obtains this snapshot asynchronously with a bounded wait.
+    // nil means the check failed; it must not be treated as "no mounted images".
+    var mountedImageRoots: () -> [URL]?
     var writableParent: (URL) -> Bool = {
         FileManager.default.isWritableFile(atPath: $0.path)
     }
@@ -77,7 +62,9 @@ struct ExistingAppDiscovery {
         guard let incomingID else { return selection(exact, "incoming_identity_unreadable") }
         guard !requiresSystemLocation else { return selection(exact, "requires_system_location") }
 
-        let imageRoots = mountedImageRoots()
+        guard let imageRoots = mountedImageRoots() else {
+            return selection(exact, "mount_check_unavailable", ambiguous: true)
+        }
         func eligible(_ url: URL) -> Bool {
             guard url.pathExtension.lowercased() == "app",
                   url != root, Self.isWithin(url, root: root),
