@@ -1292,6 +1292,7 @@ class UserPreferences: ObservableObject {
         previousRunVersion = defaults.string(forKey: lastRunVersionKey)
 
         _ = prepareInstallLocationDefault(defaults)
+        _ = prepareSilentFailureNotificationDefault(defaults)
 
         defaults.set(Bundle.main.appVersion, forKey: lastRunVersionKey)
     }
@@ -1316,6 +1317,19 @@ class UserPreferences: ObservableObject {
         return resolved
     }
 
+    /// Preserve silence for users who selected it before this checkbox existed.
+    /// The saved feedback mode also covers upgrades from releases without a
+    /// version marker. Persist the default once, before users can change modes.
+    private static func prepareSilentFailureNotificationDefault(_ defaults: UserDefaults) -> Bool {
+        if let savedChoice = defaults.object(forKey: "notifyOnFailureInSilentMode") as? Bool {
+            return savedChoice
+        }
+
+        let resolved = defaults.string(forKey: "feedbackMode") != FeedbackMode.silent.rawValue
+        defaults.set(resolved, forKey: "notifyOnFailureInSilentMode")
+        return resolved
+    }
+
     private init() {
         self.autoTrashDMG = UserDefaults.standard.object(forKey: "autoTrashDMG") as? Bool ?? true
         self.revealInFinder = UserDefaults.standard.object(forKey: "revealInFinder") as? Bool ?? true
@@ -1326,10 +1340,9 @@ class UserPreferences: ObservableObject {
 
         let savedMode = UserDefaults.standard.string(forKey: "feedbackMode") ?? FeedbackMode.progressBar.rawValue
         self.feedbackMode = FeedbackMode(rawValue: savedMode) ?? .progressBar
-        self.notifyOnFailureInSilentMode = UserDefaults.standard.object(forKey: "notifyOnFailureInSilentMode") as? Bool ?? true
-
-        // Use the same idempotent migration path even if something initializes
+        // Use the same idempotent migration paths even if something initializes
         // preferences before the app delegate runs the normal startup migrations.
+        self.notifyOnFailureInSilentMode = Self.prepareSilentFailureNotificationDefault(UserDefaults.standard)
         self.installLocation = Self.prepareInstallLocationDefault(UserDefaults.standard)
 
         self.customInstallPath = UserDefaults.standard.string(forKey: "customInstallPath") ?? ""
