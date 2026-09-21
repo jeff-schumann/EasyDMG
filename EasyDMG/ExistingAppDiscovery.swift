@@ -8,10 +8,6 @@ struct ExistingAppDiscovery {
         let target: URL
         let reason: String
         let requiresConfirmation: Bool
-
-        var relativeLocation: String {
-            target.pathComponents.dropFirst(searchRoot.pathComponents.count).joined(separator: "/")
-        }
     }
 
     var registeredApps: (String) -> [URL] = {

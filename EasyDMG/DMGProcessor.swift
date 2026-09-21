@@ -1018,6 +1018,15 @@ class DMGProcessor: ObservableObject {
         case privilegedHelper = "privileged_helper"
     }
 
+    /// What the user chose when an existing copy of the app was found.
+    /// `keepBoth` installs a second copy where the incoming app would normally
+    /// land and leaves the copy we found untouched.
+    private enum ExistingAppDecision: Equatable {
+        case replace
+        case keepBoth
+        case cancel
+    }
+
     private enum SystemLocationDecision: Equatable {
         case installToSystem
         case openInFinder
@@ -3546,10 +3555,13 @@ class DMGProcessor: ObservableObject {
             exactName: resolvedAppName,
             requiresSystemLocation: locationMarkers.contains(.systemExtension)
         )
-        let destinationURL = discovery.target
-        let destinationPath = destinationURL.path
-        let targetDirectory = destinationURL.deletingLastPathComponent()
-        let stagedURL = stagedAppURL(for: resolvedAppName, in: targetDirectory)
+        // Mutable because "Keep Both" redirects the install to a second copy at
+        // the incoming app's own name. Everything downstream reads these, so the
+        // one reassignment below is enough to move the whole install.
+        var destinationURL = discovery.target
+        var destinationPath = destinationURL.path
+        var targetDirectory = destinationURL.deletingLastPathComponent()
+        var stagedURL = stagedAppURL(for: resolvedAppName, in: targetDirectory)
         diagnostic("Existing app discovery: root=\(discovery.searchRoot.path), candidates=\(discovery.candidates.map(\.path)), target=\(destinationPath), reason=\(discovery.reason)")
         support(event: "existing_app_discovery", details: [
             "app": resolvedAppName,
@@ -3570,7 +3582,16 @@ class DMGProcessor: ObservableObject {
                 newVersion: newVersion
             )
 
-            let shouldReplace: Bool
+            // "Keep Both" only makes sense when the copy we found sits somewhere
+            // other than where the incoming app would land, nothing already
+            // occupies that spot, and there is a single existing copy — with
+            // several, "both" stops describing the outcome.
+            let keepBothURL = installDirectory.appendingPathComponent(resolvedAppName)
+            let canKeepBoth = keepBothURL.standardizedFileURL != destinationURL.standardizedFileURL
+                && !FileManager.default.fileExists(atPath: keepBothURL.path)
+                && discovery.candidates.count <= 1
+
+            let decision: ExistingAppDecision
             if versionComparison == .newer && UserPreferences.shared.autoInstallNewerVersions
                 && !discovery.requiresConfirmation {
                 diagnostic("Auto-installing newer version of \(resolvedAppName): v\(installedVersion ?? "?") -> v\(newVersion ?? "?")")
@@ -3583,18 +3604,19 @@ class DMGProcessor: ObservableObject {
                         "new_version": newVersion ?? ""
                     ]
                 )
-                shouldReplace = true
+                decision = .replace
             } else {
-                shouldReplace = await showSkipReplaceDialog(
+                decision = await showSkipReplaceDialog(
                     appName: resolvedAppName,
                     installedVersion: installedVersion,
                     newVersion: newVersion,
                     installDirectory: installDirectory,
-                    relativeLocation: discovery.relativeLocation == resolvedAppName ? nil : discovery.relativeLocation
+                    existingURL: destinationURL,
+                    canKeepBoth: canKeepBoth
                 )
             }
 
-            if !shouldReplace {
+            if decision == .cancel {
                 diagnostic("Installation canceled by user")
                 support(
                     event: "install_decision",
@@ -3618,14 +3640,35 @@ class DMGProcessor: ObservableObject {
                 return
             }
 
-            shouldReplaceExistingApp = true
-            support(
-                event: "install_decision",
-                details: ["action": "replace", "app": resolvedAppName, "dmg": dmgName]
-            )
+            if decision == .keepBoth {
+                diagnostic("Keeping both copies of \(resolvedAppName): existing at \(destinationPath), installing to \(keepBothURL.path)")
+                support(
+                    event: "install_decision",
+                    details: [
+                        "action": "keep_both",
+                        "app": resolvedAppName,
+                        "dmg": dmgName,
+                        "existing": destinationPath,
+                        "target": keepBothURL.path
+                    ]
+                )
+                // Redirect the install. The existing copy is left alone, so the
+                // replacement safeguards below stay switched off and this proceeds
+                // exactly like a first-time install.
+                destinationURL = keepBothURL
+                destinationPath = keepBothURL.path
+                targetDirectory = destinationURL.deletingLastPathComponent()
+                stagedURL = stagedAppURL(for: resolvedAppName, in: targetDirectory)
+            } else {
+                shouldReplaceExistingApp = true
+                support(
+                    event: "install_decision",
+                    details: ["action": "replace", "app": resolvedAppName, "dmg": dmgName]
+                )
 
-            if currentFeedbackMode == .progressBar {
-                ProgressWindowController.shared.show(message: "Preparing replacement...", progress: 0.2)
+                if currentFeedbackMode == .progressBar {
+                    ProgressWindowController.shared.show(message: "Preparing replacement...", progress: 0.2)
+                }
             }
         }
 
@@ -3977,65 +4020,110 @@ class DMGProcessor: ObservableObject {
         )
     }
 
+    /// Confirms replacing a copy of the app that is already installed.
+    ///
+    /// The alert's own title and lead sentence stay centered, the way macOS
+    /// alerts normally look. Everything below them is a left-aligned block of
+    /// labeled rows that can be scanned without reading: the versions first,
+    /// then where the existing copy actually lives.
+    ///
+    /// Those placement rows only appear when the copy we found isn't where the
+    /// incoming app would land — `Location` when it sits in a subfolder,
+    /// `Existing copy` when it carries a different name. Both can appear at once
+    /// for a renamed copy inside a subfolder.
+    ///
+    /// The block lives in the accessory view rather than in `informativeText`
+    /// because NSAlert centers its informative text and offers no way to change
+    /// that. The accessory is the supported place to put left-aligned content.
     private func showSkipReplaceDialog(
         appName: String,
         installedVersion: String?,
         newVersion: String?,
         installDirectory: URL,
-        relativeLocation: String?
-    ) async -> Bool {
+        existingURL: URL,
+        canKeepBoth: Bool
+    ) async -> ExistingAppDecision {
         let displayName = appName.strippingAppSuffix
-        let locationDescription = installDirectory.abbreviatedPath
-        var informative: String
+        let existingFolder = existingURL.deletingLastPathComponent()
+        let isNested = existingFolder.standardizedFileURL.path
+            != installDirectory.standardizedFileURL.path
+        let existingName = existingURL.lastPathComponent
+        let isRenamed = existingName != appName
+
         let comparison = replacementVersionComparison(
             installedVersion: installedVersion,
             newVersion: newVersion
         )
+
+        // A nested copy gets its full path in the Location row instead. Naming the
+        // install folder here as well would describe the same place twice, once
+        // relative and once absolute, which reads as two different locations.
+        let leadSentence = isNested
+            ? "\(displayName) is already installed."
+            : "\(displayName) is already installed in \(installDirectory.abbreviatedPath)."
+
+        // Versions lead: they are what the choice usually turns on. Where the
+        // existing copy lives follows, since it only appears when it's unusual.
+        var rows: [String] = []
         if comparison != .unknown, let installed = installedVersion, let new = newVersion {
-            let installedDisplayVersion = dialogVersionText(from: installed)
-            let newDisplayVersion = dialogVersionText(from: new)
-            let comparisonText: String
-
-            switch comparison {
-            case .same:
-                comparisonText = "This appears to be the same version."
-            case .newer:
-                comparisonText = "This looks like a newer version."
-            case .older:
-                comparisonText = "This looks like an older version."
-            case .unknown:
-                comparisonText = ""
-            }
-
-            informative = [
-                "\(displayName) is already installed in",
-                "\(locationDescription).",
-                "",
-                "Installed: \(installedDisplayVersion)",
-                "New: \(newDisplayVersion)",
-                "",
-                comparisonText
-            ].joined(separator: "\n")
-        } else {
-            // Break before the path rather than letting the alert's narrow text
-            // column wrap it wherever it lands — a path split mid-path ("~/" on one
-            // line, "Applications." on the next) is harder to read than a short line.
-            informative = "\(displayName) is already installed in\n\(locationDescription)."
+            rows.append("Installed: \(dialogVersionText(from: installed))")
+            rows.append("New: \(dialogVersionText(from: new))")
+        }
+        if isNested {
+            rows.append("Location: \(existingFolder.abbreviatedPath)")
+        }
+        if isRenamed {
+            rows.append("Existing copy: \(existingName.strippingAppSuffix)")
         }
 
-        if let relativeLocation {
-            informative += "\n\nCopy to replace: \(relativeLocation)"
+        let rowsText = rows.joined(separator: "\n")
+
+        // Held apart from the rows: this is a sentence, not a labeled value, so it
+        // stays centered like the lead sentence rather than aligning to the rows'
+        // left edge.
+        let verdictText: String?
+        switch comparison {
+        case .same:
+            verdictText = "This appears to be the same version."
+        case .newer:
+            verdictText = "This looks like a newer version."
+        case .older:
+            verdictText = "This looks like an older version."
+        case .unknown:
+            verdictText = nil
         }
-        let dialogText = informative
 
         return await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
                 alert.messageText = "Replace \(displayName)?"
-                alert.informativeText = dialogText
+                alert.informativeText = leadSentence
 
                 alert.icon = AlertIcon.image
+
+                // An alert sizes itself to its accessory view, so this fixed width
+                // sets the whole dialog's width — the same lever
+                // showInstallLocationFallbackDialog uses. Sized to the widest line
+                // the block can produce for a typical path (the Location row runs
+                // ~252pt) with a little slack. Going wider buys nothing: the buttons
+                // stack vertically at any width, so only the text benefits.
+                let accessoryWidth: CGFloat = 280
+
+                func label(_ text: String, _ alignment: NSTextAlignment) -> NSTextField {
+                    let field = NSTextField(wrappingLabelWithString: text)
+                    field.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+                    field.alignment = alignment
+                    field.isSelectable = false
+                    field.preferredMaxLayoutWidth = accessoryWidth
+                    field.setFrameSize(NSSize(width: accessoryWidth, height: field.fittingSize.height))
+                    return field
+                }
+
+                // The accessory is itself centered in the alert, so a centered label
+                // inside it is centered in the dialog.
+                let rowsLabel = rowsText.isEmpty ? nil : label(rowsText, .left)
+                let verdictLabel = verdictText.map { label($0, .center) }
 
                 let suppressCheckbox: NSButton?
                 if comparison == .newer {
@@ -4047,19 +4135,64 @@ class DMGProcessor: ObservableObject {
                     checkbox.state = .off
                     checkbox.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     checkbox.sizeToFit()
-                    alert.accessoryView = checkbox
                     suppressCheckbox = checkbox
                 } else {
                     suppressCheckbox = nil
                 }
 
+                // Frame layout, so origins are bottom-left and the pieces stack
+                // upwards: checkbox, then the verdict sentence, then the rows. Each
+                // is full accessory width, so their own alignment decides where the
+                // text sits. Spacing is added before a piece rather than after, so
+                // whichever ends up on top leaves no trailing gap.
+                let checkboxSpacing: CGFloat = 10
+                let paragraphSpacing: CGFloat = 12
+                let accessory = NSView(frame: NSRect(x: 0, y: 0, width: accessoryWidth, height: 0))
+                var stackHeight: CGFloat = 0
+
+                func place(_ view: NSView, above spacing: CGFloat) {
+                    if stackHeight > 0 { stackHeight += spacing }
+                    view.setFrameOrigin(NSPoint(x: 0, y: stackHeight))
+                    accessory.addSubview(view)
+                    stackHeight += view.frame.height
+                }
+
+                if let checkbox = suppressCheckbox {
+                    place(checkbox, above: 0)
+                }
+                if let verdictLabel {
+                    place(verdictLabel, above: checkboxSpacing)
+                }
+                if let rowsLabel {
+                    place(rowsLabel, above: paragraphSpacing)
+                }
+
+                accessory.setFrameSize(NSSize(width: accessoryWidth, height: stackHeight))
+                alert.accessoryView = accessory
+
+                // NSAlert lays two buttons out in a row and stacks three vertically,
+                // regardless of how wide the alert is or how short the labels are.
+                // So this dialog is a row without "Keep Both" and a stack with it.
+                // Either way the order is the same and matches the HIG: default
+                // first (trailing in a row, top of a stack), Cancel last.
                 alert.addButton(withTitle: "Replace")
+                if canKeepBoth {
+                    alert.addButton(withTitle: "Keep Both")
+                }
                 alert.addButton(withTitle: "Cancel")
 
                 presentHostedAlert(alert) { response in
-                    let shouldReplace = response == .alertFirstButtonReturn
+                    let decision: ExistingAppDecision
+                    switch response {
+                    case .alertFirstButtonReturn:
+                        decision = .replace
+                    case .alertSecondButtonReturn where canKeepBoth:
+                        decision = .keepBoth
+                    default:
+                        decision = .cancel
+                    }
 
-                    if shouldReplace, suppressCheckbox?.state == .on {
+                    if decision == .replace, suppressCheckbox?.state == .on {
                         UserPreferences.shared.autoInstallNewerVersions = true
                         self.support(
                             event: "preference_change",
@@ -4071,7 +4204,7 @@ class DMGProcessor: ObservableObject {
                         )
                     }
 
-                    continuation.resume(returning: shouldReplace)
+                    continuation.resume(returning: decision)
                 }
             }
         }
