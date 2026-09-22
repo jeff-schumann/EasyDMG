@@ -29,7 +29,7 @@ EasyDMG runs the same Gatekeeper check macOS uses, before the app is installed. 
 You can turn off the unidentified-developer warning in Settings. This is not recommended unless you know what you are doing, and often find the warning a pain. Even with the warning off, the macOS security check still runs on every install, and apps flagged as unsafe are still blocked. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 
 **What if a DMG isn't a simple drag-and-drop?** <br>
-EasyDMG won't guess. If a DMG contains a license agreement, a .pkg installer, more than one app, or anything else unusual, it just opens the DMG so you can take it from there.
+EasyDMG won't guess. If a DMG contains a license agreement, a .pkg installer, more than one app, or anything else unusual, it just opens the DMG so you can take it from there. See [Edge Cases & Safeguards](EDGE_CASES.md) for the full list of situations it handles.
 
 **Do I have to use EasyDMG for every install?** <br>
 No. You choose whether EasyDMG is your default DMG handler, and you can open any DMG the usual way with right-click → Open With → DiskImageMounter. Where apps are installed, whether DMGs go to the Trash, and more are up to you in Settings.
@@ -117,10 +117,6 @@ Apps in the App Store are sandboxed, which prohibits:
 - Accessing files outside the sandbox
 
 These are core to EasyDMG's functionality, making App Store distribution incompatible.
-
-## Handling Tricky Installs
-
-EasyDMG handles common installation complications automatically and offers manual installation when it needs your judgment. See [Edge Cases & Safeguards](EDGE_CASES.md) for details on password-protected DMGs, license agreements, existing apps, custom install folders, and other unusual situations.
 
 ## Building from Source
 
