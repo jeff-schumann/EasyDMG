@@ -22,23 +22,47 @@ EasyDMG security fixes are targeted at the latest published release.
 
 If you are reporting a security issue, please confirm the affected EasyDMG version and your macOS version in the report.
 
-## Security & Quarantine Architecture
+## How EasyDMG Checks Apps
 
-To balance convenience with system safety, EasyDMG performs a security preflight check using macOS security tools (`spctl` and `codesign`) before deciding whether to remove quarantine attributes from a copied application.
+EasyDMG copies the app to a temporary location inside your chosen installation folder, then checks that copy before completing the installation or replacing an existing app.
 
-### App Security Assessment
+It requests a security assessment using macOS's built-in `spctl` tool. If that assessment rejects the app, EasyDMG uses `codesign` to help distinguish signature problems from unsigned or unnotarized software. macOS may contact Apple during these checks; notarization information may also be available locally, including from a cached or attached ticket.
 
-When processing a `.app` bundle, EasyDMG performs a multi-stage security preflight check:
-1. **Primary Assessment**: Runs `spctl --assess --type execute` to match macOS's launch-time Gatekeeper decision. Stapled apps are verified locally; unstapled-but-notarized apps trigger an online lookup with Apple's notary service.
-2. **Diagnostics Refinement**: If `spctl` rejects the app, EasyDMG runs `codesign --verify --deep --strict` to identify the precise cause (revoked signature, tampered bundle, unsigned, etc.).
+These checks help assess an app, but aren't a guarantee of safety or an exact substitute for macOS's checks when launching it. See [Apple's guidance on testing notarized software](https://developer.apple.com/forums/thread/130560).
 
-### Handling and Quarantine Decisions
+### Assessment Results
 
-The app is categorized into one of three security states to determine how the `com.apple.quarantine` attribute is handled:
+- **Verified:** The assessment succeeds and identifies notarized Developer ID software, Apple software, or Mac App Store software. EasyDMG proceeds automatically. Acceptance without confirmed notarization for a Developer ID app, or an unknown assessment source, is treated as unverified.
+- **Unverified:** EasyDMG couldn't establish a verified result. This includes unsigned or unnotarized apps, inconclusive results, and checks that timed out or couldn't run. It does not establish that an app is safe. By default, EasyDMG asks whether to continue, open the DMG in Finder, or cancel.
+- **Blocked:** EasyDMG recognizes a report of malware, a revoked certificate, or a damaged or modified signature or app bundle. It won't complete automatic installation or remove quarantine. The available choices are to open the DMG in Finder or cancel.
 
-*   **Verified (Notarized / Gatekeeper Approved)**: The app passes all checks. EasyDMG automatically removes the quarantine attribute to prevent App Translocation and enable seamless background updates.
-*   **Unverified (Unsigned / Unidentified Developer)**: No malware or tampering is detected, but the developer cannot be verified. EasyDMG prompts the user with a warning before stripping the quarantine attribute. This prompt can be globally bypassed by enabling **Do not warn me about apps from unidentified developers** in Settings.
-*   **Blocked (Malware / Revoked / Damaged)**: If macOS reports active malware, a revoked signature, or a tampered/damaged bundle, EasyDMG **refuses** to automatically remove quarantine and restricts options to canceling or manual installation.
+The **Do not warn me about apps from unidentified developers** setting skips the warning for **all unverified results**, including failed or timed-out checks. It's off by default. Security checks still run, and blocked results cannot be approved for automatic installation.
+
+### Quarantine and Installation
+
+After verification or approval, EasyDMG attempts to remove the `com.apple.quarantine` marker from the temporary app copy and its contents, then moves it into place. This reduces first-launch friction and avoids quarantine-related problems with app location and updates. If removal fails, the failure is logged, but installation can still continue.
+
+Removing quarantine changes the app's normal first-launch warning behavior. EasyDMG does not disable Gatekeeper system-wide.
+
+If you cancel or choose Open in Finder at the security prompt, EasyDMG attempts to remove the temporary copy and does not replace the existing app. The original DMG is kept.
+
+**Open app after installation** is off by default. When enabled, it also opens unverified apps whose installation you approved, including through the warning preference above.
+
+## Replacing Existing Apps
+
+EasyDMG can find renamed apps and apps in subfolders within your selected installation folder. Ambiguous matches require confirmation. Matching an app's application identifier helps locate an existing copy; it does not verify that both copies were signed by the same developer.
+
+EasyDMG refuses automatic replacement when it detects that an existing app is managed by the App Store. It checks relevant replacement permissions before asking you to quit the existing app. Enabling **Always install newer versions without asking** skips eligible replacement prompts, but does not skip the security assessment.
+
+## Password-Protected DMGs
+
+EasyDMG first uses macOS's unlock flow, which can use passwords saved by macOS. If EasyDMG's own password prompt is needed, input is masked and passed to the system disk-image tool through an input pipe, rather than command-line arguments.
+
+EasyDMG does not save entered passwords or write them to its logs. Any password storage offered by macOS is managed by macOS. Canceling the password prompt stops the installation.
+
+## EasyDMG Updates
+
+EasyDMG's own updates use HTTPS and [Sparkle's signed update archives](https://sparkle-project.org/documentation/). Sparkle verifies archive signatures using the public key included in EasyDMG. These signatures authenticate EasyDMG updates; they don't authenticate other apps you install from DMGs.
 
 ## Reporting a Vulnerability
 
@@ -53,7 +77,9 @@ Please include:
 - clear reproduction steps or a proof of concept, if available
 - whether the issue has been disclosed anywhere else
 
-Reports will be reviewed as quickly as possible. If the report is confirmed, the goal is to acknowledge receipt within 7 days and share follow-up status as fixes or mitigations are prepared.
+If logs would help, EasyDMG's local activity log is at `~/Library/Logs/EasyDMG/easydmg.log`, with older entries in `easydmg.previous.log` in the same folder. Logs can contain usernames, full file paths, app names, and security-check results. Review them before sharing, and send security-related logs privately with your report. See [PRIVACY.md](../PRIVACY.md) for more about local logging.
+
+The goal is to acknowledge receipt within 7 days and share follow-up status as the report is investigated and any fixes are prepared.
 
 ## Disclosure Guidance
 

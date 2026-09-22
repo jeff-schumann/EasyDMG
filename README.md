@@ -23,28 +23,33 @@ After setting EasyDMG as your default app for opening DMGs, opening any DMG will
 
 ## Common Questions
 
-**Is it safe?**
-EasyDMG runs the same Gatekeeper check macOS uses when you open a new app. Apps from verified developers install normally. Apps from unidentified developers get a warning first. Apps macOS flags as malware, damaged, or revoked are never installed automatically. EasyDMG doesn't turn off or get around any of macOS's built-in protections.
+**Is it safe?** <br>
+EasyDMG runs the same Gatekeeper check macOS uses, before the app is installed. Apps from verified developers install normally. Apps from unidentified developers get a warning first. Apps macOS flags as malware, damaged, or revoked are never installed automatically. EasyDMG doesn't disable any of macOS's built-in protections.
 
-Tired of the unidentified-developer warning? Turn it off in Settings. The macOS security check still runs on every install, and apps flagged as unsafe are still blocked. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
+You can turn off the unidentified-developer warning in Settings. This is not recommended unless you know what you are doing, and often find the warning a pain. Even with the warning off, the macOS security check still runs on every install, and apps flagged as unsafe are still blocked. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
 
-**What if a DMG isn't a simple drag-and-drop?**
+**What if a DMG isn't a simple drag-and-drop?** <br>
 EasyDMG won't guess. If a DMG contains a license agreement, a .pkg installer, more than one app, or anything else unusual, it just opens the DMG so you can take it from there.
 
-**Am I still in control?**
-Yes. You choose whether EasyDMG is your default DMG handler, and you can open any DMG the usual way with right-click → Open With → DiskImageMounter. Where apps are installed and whether DMGs go to the Trash are both up to you in Settings.
+**Do I have to use EasyDMG for every install?** <br>
+No. You choose whether EasyDMG is your default DMG handler, and you can open any DMG the usual way with right-click → Open With → DiskImageMounter. Where apps are installed, whether DMGs go to the Trash, and more are up to you in Settings.
 
-## Features
+## Why Use EasyDMG?
+Let's be real, installing apps isn't actually that hard. It's only moderately annoying. But it's nice to make your workflow smoother, even if it doesn't change the world. Plus the hamster is cute.
 
 - **It's EASY!**: Set EasyDMG as your default DMG handler and forget about it. 
-- **It's simple**: The app only runs when opening a DMG. It doesn't take up space in your dock or menu bar, it's gone until you need it
-- **It's native**: Built with Swift for MacOS, it's quick and seamless
-- **Update apps where you keep them**: EasyDMG finds registered copies inside your chosen install folder, including subfolders and renamed apps, and updates them in place. Copies outside that folder are left alone. If several copies match, EasyDMG asks before replacing the default copy; if that default is elsewhere, it checks the original filename instead. Apps that require `/Applications` still install directly there.
-- **Flexible settings**: Choose installation preferences that match your workflow
+- **It's simple**: The app only runs when opening a DMG. It doesn't take up space in your dock or menu bar, it's gone until you need it.
+- **It's native**: Built with Swift for macOS, it's quick and seamless.
+- **It's fast**: Double-click and go. You might not even get to see the hilarious notes in the progress bar.
+- **It's flexible**: Make EasyDMG work the way you want.
+  - **Where apps go**: Defaults to `/Applications`, but you can pick any folder you want.
+  - **How much you see**: A progress bar, a notification when it's finished, or nothing at all.
+  - **What happens after**: Open the app, reveal it in Finder, and send the DMG to the Trash. Or don't.
+  - **App updates**: Let newer versions replace older ones automatically, or confirm every time.
+- **It's cautious**: Designed to make installation easy while staying safe. When ambiguity arises, if EasyDMG can handle it safely (such as retrying passwords or evaluating licenses), it does; otherwise, it gracefully falls back to manual installation.
 - **Save disk space**: Move DMGs to Trash after successful installation. No more old DMGs sitting in your downloads folder!
-- **Cautious by default**: Designed to make installation easy while staying safe. When ambiguity arises, if EasyDMG can handle it safely (such as retrying passwords or evaluating licenses), it does; otherwise, it gracefully falls back to manual installation.
-- **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install — verified apps just open, apps from unidentified developers take one click, and apps macOS flags as unsafe are never installed automatically. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
-- **Automatic updates**: Built-in Sparkle integration for easy updates
+- **Streamlined Security**: macOS normally forces you to open Privacy & Security to approve unrecognized apps. EasyDMG handles that check during install. Verified apps just open, apps from unidentified developers take one click, and apps macOS flags as unsafe are never installed automatically. See [SECURITY.md](https://github.com/jeff-schumann/EasyDMG?tab=security-ov-file) for details.
+- **Automatic updates**: Built-in Sparkle integration for easy updates.
 - **It's fun**: The wizard hamster updates you on his silly antics in the progress bar. Learn how to summon your own hamster wizard on the [website](https://easydmg.app/summon-a-wizard-hamster).
 
 ## Screenshots
@@ -113,11 +118,9 @@ Apps in the App Store are sandboxed, which prohibits:
 
 These are core to EasyDMG's functionality, making App Store distribution incompatible.
 
-## Known Limitations
+## Handling Tricky Installs
 
-EasyDMG follows a user-first philosophy: make app installs easy, but when ambiguity arises, handle what we can safely and gracefully fall back to manual installation when we can't. For complex configurations that cannot be resolved, it opens the DMG rather than risking incorrect automation.
-
-Some edge cases are documented and being tested - see [EDGE_CASES.md](EDGE_CASES.md) for detailed technical documentation including resolved and outstanding issues.
+EasyDMG handles common installation complications automatically and offers manual installation when it needs your judgment. See [Edge Cases & Safeguards](EDGE_CASES.md) for details on password-protected DMGs, license agreements, existing apps, custom install folders, and other unusual situations.
 
 ## Building from Source
 
@@ -152,7 +155,7 @@ Contributions welcome! Please note:
 
 1. By contributing, you agree to the [Contributor License Agreement (CLA)](CLA.md)
 2. All contributions will be dual-licensed under GPL-3.0 and commercial licenses
-3. Review [EDGE_CASES.md](EDGE_CASES.md) for known issues and testing priorities
+3. Review [Edge Cases & Safeguards](EDGE_CASES.md) to understand existing behavior before proposing changes.
 4. Open an issue to discuss proposed changes before submitting large PRs
 
 Or contribute by buying me a coffee! It fuels further development :)

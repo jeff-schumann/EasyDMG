@@ -1,134 +1,228 @@
-# EasyDMG Edge Cases & Potential Issues
+# EasyDMG Edge Cases & Safeguards
 
-This document tracks edge cases that could affect automatic DMG installation. It is intentionally conservative: EasyDMG should automate only the boring, common case and fall back to manual installation when a DMG looks unusual.
+This guide explains what EasyDMG does when an installation is more complicated than a simple drag-and-drop. It covers automatic handling, decisions you may be asked to make, and situations that need manual installation.
 
-**Last updated**: 2026-05-28
+EasyDMG proceeds automatically when it can identify one valid main app, choose a usable destination, and pass the installation safeguards. Obvious helper apps can be ignored when exactly one main app remains. When automatic installation cannot proceed, EasyDMG offers manual installation or explains a confirmed problem, such as insufficient disk space.
 
-## Current Rule of Thumb
+**Last reviewed:** 2026-09-22, against the current source. This review did not include new runtime tests. Historical checks are identified separately below.
 
-EasyDMG should automatically install a DMG only when it finds one valid, top-level `.app` bundle that looks like the actual app the user wants in `/Applications`.
+## Quick Reference
 
-If the DMG contains installers, packages, license gates, multiple plausible apps, or anything else ambiguous, EasyDMG should open the DMG and let the user handle it manually.
+The outcomes below remain subject to the other installation checks and your settings.
 
-## Worth Handling Soon
+| Situation | What EasyDMG does | Your involvement |
+| --- | --- | --- |
+| [Password-protected DMG](#the-dmg-needs-a-password) | Tries the macOS unlock flow first, then its own prompt if needed. | Enter a password if macOS cannot unlock it automatically. |
+| [DMG license agreement](#the-dmg-has-a-license-agreement) | Hands license acceptance to macOS; usually leaves installation manual. | Accept the agreement and follow the manual flow; the native encrypted-mount exception is below. |
+| [Package, installer wrapper, or multiple main apps](#the-dmg-contains-an-installer-or-several-apps) | Opens the DMG for manual installation. | Choose and run the appropriate installer or app. |
+| [Missing or invalid app](#there-is-no-usable-top-level-app) | Opens the mounted contents in Finder. | Inspect the contents and follow the developer's instructions. |
+| [Unusable install folder](#the-chosen-folder-is-unavailable-or-not-writable) | Offers Personal when appropriate, or manual installation. | Choose the offered alternative or cancel. |
+| [App requires `/Applications`](#the-app-requires-applications) | Uses that folder or offers a one-time change to it. | Confirm the change, or arrange a manual install with an administrator. |
+| [Existing app](#the-app-is-renamed-or-in-a-subfolder) | Finds eligible copies inside your chosen folder and can update in place. | Confirm replacement unless an eligible newer-version update is automatic. |
+| [Several installed copies](#several-installed-copies-match) | Selects a candidate conservatively and requires replacement confirmation. | Review the selected copy. |
+| [Running app](#the-app-is-already-running) | Asks it to quit before copying. | Approve quitting, retry if necessary, or cancel. |
+| [Unverified or blocked app](#macos-cannot-verify-the-app-or-flags-it-as-unsafe) | Warns for unverified apps; never automatically installs blocked apps. | Approve an unverified app, open Finder, or cancel, as offered. |
+| [Insufficient space or interrupted copy](#there-is-not-enough-space-or-copying-fails) | Stops with an explanation when the cause is known; otherwise offers manual recovery. | Resolve the problem or use the manual flow. |
+| [Cancellation or manual handoff](#cleanup-and-cancellation) | Keeps the original DMG and attempts to remove any temporary app copy. | Retry later or complete installation manually. |
 
-### 17. Non-Standard `/Applications` Locations - Rating: 3/10 - PARTIALLY RESOLVED
+## Opening and Inspecting a DMG
 
-Some users may have unusual `/Applications` setups, such as a symlink, network mount, external drive, or permission-limited location.
+### The DMG needs a password
 
-**Current behavior**: The install destination is a preference — Applications (`/Applications`), Personal (`~/Applications`), or a custom folder — resolved on first launch against what the account can actually write to. EasyDMG validates the chosen folder exists, is a directory, and is writable before installing. When it isn't writable, EasyDMG offers `~/Applications` for that install (optionally as the new default) rather than silently relocating the app. This covers standard (non-admin) accounts on managed or shared Macs, which can never write to `/Applications`. Anything that leaves no usable folder ends at a recovery dialog offering a manual install with the volume still mounted, never an error.
+EasyDMG first lets macOS's DiskImageMounter handle unlocking. This can use a saved password or the native macOS prompt. EasyDMG watches for the volume to mount or the unlock flow to be canceled, and can reuse an already-mounted image.
 
-Apps carrying a system extension, including a DriverKit driver, are detected before install and stopped, since macOS won't activate one outside `/Applications` — an account that can write there is offered a one-time install to `/Applications`, and an account that can't is told the app needs an administrator and handed the mounted volume. Bundled launch daemons and privileged helpers are logged but not acted on.
+If native unlocking is unavailable, EasyDMG offers its own secure password prompt. Incorrect passwords can be retried without a fixed limit. After two failed attempts, **Use macOS Password Prompt** provides another route. Canceling stops installation and keeps the DMG. An explicit handoff to the macOS prompt does not create a redundant manual-install notification.
 
-**Remaining concern**: Network-mounted or external install folders may still behave oddly. This is uncommon, but EasyDMG could choose to fall back when the destination is not on a local volume. Apps that assume `/Applications` without shipping a detectable marker — a hardcoded path in an updater, relaunch script, or licence check — still install into a user folder and misbehave at runtime. There is no static signal for this, and the only alternative is a list of known-bad apps, which isn't worth maintaining.
+Password handling is described further in [Security Policy](.github/SECURITY.md#password-protected-dmgs).
 
-**Implementation difficulty**: 3/10.
+### The DMG has a license agreement
 
-### 19. Huge Apps and Long Copies - Rating: 4/10 - MOSTLY MITIGATED
+For an unencrypted DMG, EasyDMG checks image metadata for a software license agreement before mounting. If one is found, it opens the image with DiskImageMounter so macOS presents the agreement, and leaves installation manual. If that licensed image is already mounted, EasyDMG opens its contents without repeating the agreement prompt.
 
-Large apps can take long enough that users wonder whether anything is still happening.
+Encrypted DMGs have two paths:
 
-**Current behavior**: Copying now runs off the main actor through `withMagicFallback`, so the progress UI can continue showing "still working" messages during slow operations.
+- **Native macOS unlock:** A successful native mount has already enforced any image-level agreement. EasyDMG avoids another metadata/password prompt and can continue automatic installation if the other safeguards pass.
+- **EasyDMG password prompt:** EasyDMG checks license metadata using the entered password before mounting. A detected agreement sends the image to macOS for manual installation.
 
-**Remaining concern**: Progress is staged, not byte-accurate. This is a UX polish issue rather than a correctness issue.
+A custom agreement shown inside an app on first launch does not itself trigger manual installation. Failed or unreadable license metadata is logged and is not treated as proof that a license gate exists.
 
-**Implementation difficulty**: 5/10 if we want true byte-level copy progress; otherwise no immediate action needed.
+### The DMG will not mount
 
-## Resolved or Mostly Mitigated
+Fast, generic mount failures get up to three total attempts with a short pause between attempts. Password-related failures go to the unlock flow instead; timed-out mount attempts are not repeated by this retry loop. An already-attached image can be reused if its mount is readable.
 
-### 1. App Translocation - Rating: 2/10 - MOSTLY MITIGATED
+If mounting still fails, EasyDMG hands the DMG to DiskImageMounter for manual handling.
 
-macOS can translocate quarantined apps launched from unsafe locations. EasyDMG copies apps to `/Applications` and removes `com.apple.quarantine` (after verifying the app via Gatekeeper/Notarization), so the normal translocation trigger should not apply for safe apps.
+### The DMG contains an installer or several apps
 
-**Remaining concern**: A small number of apps may have custom first-launch checks that complain anyway. That is app-specific and not something EasyDMG can reliably detect before launch.
+A visible top-level `.pkg` or `.mpkg` sends the DMG to manual installation, even when an app is also present.
 
-### 4. Symlinks to Shared Frameworks - Rating: 1/10 - VERIFIED
+EasyDMG also recognizes installer-like and auxiliary app names using words such as `install`, `setup`, `uninstall`, `helper`, and `readme`, plus compact suffixes such as `Installer` or `Helper`. For example, `FooInstaller.app` is treated as an installer wrapper. This is a name-based safeguard, not inspection of what the app will do when launched.
 
-Many app bundles contain framework symlinks such as `Versions/Current -> Versions/A`.
+If exactly one main app remains after filtering obvious auxiliaries, EasyDMG proceeds with that app's validation and installation checks. If several plausible main apps remain, or the only app looks like an installer or helper, it opens the mounted contents for manual installation.
 
-**Current status**: A local sanity check on 2026-05-03 confirmed `FileManager.copyItem` preserved an app-style framework symlink. This should not remain an active concern unless a real-world DMG proves otherwise.
+### There is no usable top-level app
 
-### 7. PKG Installers Masquerading as Apps - Rating: 2/10 - RESOLVED
+EasyDMG scans the top level of the mounted image. It ignores app names beginning with `.` and does not search recursively for apps inside other folders. No candidate means manual installation.
 
-Some DMGs contain `.app` files that are actually installer wrappers. They expect to run once, install the real app elsewhere, then quit.
+A candidate must have a readable `Contents/Info.plist` and a runnable executable under `Contents/MacOS`. A declared, nonblank package type (`CFBundlePackageType`) must be `APPL`; missing or blank values are accepted. If the executable name (`CFBundleExecutable`) is missing or blank, EasyDMG uses the app bundle's base name. The executable must exist, must not be a directory, and must have execute permission.
 
-**Current behavior**: EasyDMG falls back to manual installation when a top-level `.pkg` or `.mpkg` is present. It also falls back when the only app candidate looks like an installer, setup assistant, helper, readme, or uninstaller instead of the main app, including compact names like `FooInstaller.app`.
+If validation fails, EasyDMG opens the mounted contents for manual inspection rather than copying the invalid bundle.
 
-### 8. Multi-App DMGs With Uninstallers or Helpers - Rating: 2/10 - RESOLVED
+## Choosing Where to Install
 
-Some DMGs contain the main app plus helper apps such as uninstallers.
+### The chosen folder is unavailable or not writable
 
-**Current behavior**: EasyDMG filters obvious auxiliary apps with names containing `uninstall`, `installer`, `helper`, or `readme`. If exactly one main app remains, it installs that app automatically.
+**Install Location** can be Applications (`/Applications`), Personal (`~/Applications`), or a custom folder. The first-launch default is based on actual write access. EasyDMG checks that the destination exists, is a folder, and is writable; Personal can be created on demand.
 
-### 9. Hidden `.app` Files - Rating: 1/10 - RESOLVED
+When permissions prevent installation in the chosen folder and Personal is a usable alternative, EasyDMG offers Personal for that installation, optionally as the new default. It does not silently change the destination.
 
-Some DMGs include hidden `.app` bundles used by installer scripts.
+If the selected folder is missing, is not a directory, or has no usable fallback, EasyDMG offers manual installation with the volume still mounted, or cancellation.
 
-**Current behavior**: EasyDMG ignores top-level `.app` entries whose names start with `.`.
+### The app requires `/Applications`
 
-### 12. Auto-Updater Framework Assumptions - Rating: 3/10 - MOSTLY MITIGATED
+EasyDMG requires apps carrying a system extension or DriverKit driver to install directly in `/Applications`. If that folder is selected and usable, installation proceeds normally. If another folder is selected, EasyDMG offers a one-time install to `/Applications` when it is usable. Otherwise it explains that an administrator is needed and offers manual installation.
 
-The known Sparkle false-update problem was caused by copied quarantine attributes.
+Bundled launch daemons and declared privileged helpers are recorded in the log, but do not alone override your chosen location. Private app assumptions about installation paths are covered under [Limits and Optional Improvements](#limits-and-optional-improvements).
 
-**Current behavior**: EasyDMG evaluates the app's security status with macOS Gatekeeper. If it passes (or the user approves an unverified app), EasyDMG removes `com.apple.quarantine` after copying, matching the behavior users expect from a normal Finder drag-and-drop install. Blocked apps retain their quarantine state.
+### The folder is on an external or network drive
 
-**Remaining concern**: Other update frameworks could have app-specific assumptions, but there is no general-purpose fix unless a specific reproducible bug appears.
+Settings warn when a custom folder is on a recognized incompatible local drive format: ExFAT, FAT, or NTFS. This warning does not categorically block installation. If copying fails, EasyDMG can identify an incompatible format or a disconnected source/destination and explain the problem.
 
-### 15. Hardened Runtime and Notarization Checks - Rating: 2/10 - ADDRESSED
+Network destinations are not categorically rejected and are not covered by the local drive-format warning. Compatibility depends on the share and filesystem. Other copy failures can lead to manual recovery.
 
-Notarized apps with Hardened Runtime should not need special treatment from EasyDMG as long as the app bundle is copied without modification.
+## Updating an Existing App
 
-**Current status**: EasyDMG itself is configured for Hardened Runtime and Developer ID notarization. EasyDMG does not modify installed app code.
+### The app is renamed or in a subfolder
 
-### 18. Insufficient Disk Space During Copy - Rating: 2/10 - RESOLVED
+EasyDMG uses macOS's registered application locations and app identifiers to find eligible copies inside your chosen install folder. It also checks the incoming app's exact filename there. One matching copy can be updated in place, preserving its location and name.
 
-Copying without enough free space could leave a partial app behind.
+For registered candidates, EasyDMG resolves symlinks when checking folder boundaries and excludes copies inside mounted disk images, the Trash, temporary installation folders, and other app bundles. Copies outside your chosen folder are not selected for replacement. Apps requiring `/Applications` use their incoming filename directly in that folder.
 
-**Current behavior**: EasyDMG calculates app bundle size and verifies available space with a 500 MB buffer before copying. It stages the copy under a temporary `.easydmg-*` app name and cleans up the staged app if copying fails.
+Discovery is not a recursive search of every folder. If the mounted-image check fails, EasyDMG falls back to the incoming filename and requires confirmation before replacing an existing app there. If a discovered copy's parent folder is not writable, it also falls back to the incoming filename.
 
-### 21. App Bundle Validation Before Copy - Rating: 2/10 - RESOLVED
+### Several installed copies match
 
-Not every directory ending in `.app` is necessarily a normal launchable app bundle.
+If several eligible copies match, EasyDMG selects the default registered copy when it is among those candidates and requires confirmation before replacing it. Otherwise it falls back to the incoming filename and requires confirmation before replacing an existing app there.
 
-**Current behavior**: Before copying a single app candidate, EasyDMG verifies `Contents/Info.plist`, requires `CFBundlePackageType == APPL`, requires a non-empty `CFBundleExecutable`, and checks that the referenced executable exists and is executable. If validation fails, it falls back to manual installation.
+Matching an app identifier helps locate a copy; it does not establish that both copies were signed by the same developer. See [Security Policy](.github/SECURITY.md#replacing-existing-apps).
 
-### 22. DMG-Level License Agreements - Rating: 5/10 - RESOLVED
+### You want to keep the existing copy
 
-Some DMGs display a software license agreement (SLA) that the user must accept before the volume mounts. EasyDMG should not silently bypass that gate.
+**Keep Both** is available when the selected existing copy has a different name or location from where the incoming app would normally go, that incoming destination is free, and discovery found no more than one eligible match.
 
-**Current behavior**:
-- **Preflight Check**: Before mounting an unencrypted DMG, EasyDMG runs a preflight check using the shared timeout-bounded process runner to parse `hdiutil imageinfo -plist` and look for the `Software License Agreement` property. If found, it opens the DMG via `DiskImageMounter` so the OS displays the standard SLA prompt.
-- **Handling Encrypted DMGs**: Reading metadata from an encrypted DMG without a passphrase triggers a macOS SecurityAgent prompt, causing a redundant password prompt. To avoid this, preflight is skipped for encrypted DMGs; instead, the check is deferred until after the user enters the passphrase. EasyDMG then reuses the password to parse the plist metadata and redirects any licensed image to manual installation.
-- **Native Handoff**: If an encrypted DMG is mounted directly via the native `DiskImageMounter` path, macOS already presents and enforces the SLA. The extra plist check is skipped on this path to prevent overlapping prompt windows.
+It leaves the existing app in place and installs the incoming app under its own filename in your chosen install folder. It does not invent a new filename when that destination is already occupied.
 
-**Remaining concern**: Detection relies on the image's SLA flag. A DMG that gates licensing by other means (e.g. a custom first-run agreement inside the app) won't be caught here, but those generally reach the same manual-fallback path through other checks.
+### A newer version can replace the old one automatically
 
-### 23. Quitting Running App Instances - Rating: 2/10 - RESOLVED
+**Always install newer versions without asking** skips the replacement prompt only when the incoming version compares as newer, the app identity matches, and selection does not require confirmation. Same, older, or unknown versions still require a decision.
 
-Attempting to overwrite a running application bundle can cause system errors, lockups, or leave the running process bound to the old deleted files. Furthermore, "Open after install" would target the stale, running copy instead of the new version.
+This preference does not skip permission checks, running-app prompts, or security assessment.
 
-**Current behavior**: EasyDMG checks the target bundle identifier in `/Applications` before starting the copy. If a process with that identifier is running, it prompts the user to quit it before proceeding. If the user cancels, the install aborts cleanly.
+### The app is already running
 
-### 24. App Management TCC & MAS/Root Safeguards - Rating: 3/10 - RESOLVED
+For replacement, EasyDMG checks permissions before asking you to quit the existing app. It then checks running instances against the relevant app identifiers and actual replacement path, avoiding unrelated copies elsewhere.
 
-Replacing an app in `/Applications` can fail mid-install due to TCC (App Management) permissions, leaving a partially copied bundle. Additionally, replacing a Mac App Store (MAS) app or a root-owned app with a direct-download DMG would break future App Store update paths.
+For a new installation, including Keep Both, it checks running instances of the incoming app's identifier without restricting the check to a replacement path. Keep Both can therefore still ask a running copy to quit.
 
-**Current behavior**: Before writing, EasyDMG probes permissions with a non-destructive, no-op modification date write. If blocked, it diagnoses the cause:
-- **MAS / Root Owned**: If the app contains App Store receipt markers (`MASReceipt` or `com.apple.appstore` attributes) or is owned by root, automatic replacement is blocked to protect system safety and App Store update integrity.
-- **TCC Permission**: If blocked by standard TCC, it prompts the user with an interactive helper dialog, waits for permission to be granted in System Settings, and retries.
+EasyDMG asks you to approve quitting affected apps. If they do not quit, it offers retry or cancellation rather than force-quitting them.
 
-### 25. Password-Protected or Encrypted DMGs - Rating: 1/10 - RESOLVED
+### The app is protected by macOS or the App Store
 
-Attempting to mount password-protected DMGs non-interactively can cause the process to hang or fail silently.
+Automatic replacement is blocked when EasyDMG detects an App Store receipt, App Store extended attributes, or root ownership. This protection applies in every install folder.
 
-**Current behavior**:
-- **Native Handoff Priority**: EasyDMG prioritizes letting macOS's native `DiskImageMounter` handle encrypted DMGs first. This allows the system to utilize saved Keychain passphrases and native prompt flows, and avoids redundant prompts. EasyDMG monitors the system to detect when the volume mounts or the user cancels.
-- **In-App Password Prompt**: If the native flow is not used, EasyDMG prompts the user for the DMG's passphrase via an in-app secure text sheet. This dialog is hosted on a level that survives background activation.
-- **Unlimited Retries & Escapes**: Instead of aborting after a fixed number of attempts, EasyDMG allows unlimited retries. After two failures, the dialog displays a "Use macOS Password Prompt..." escape hatch button that hands the image off to `DiskImageMounter`.
-- **UI & Notification Polish**: The password window displays a steady status to avoid flickering during attempts. If the user cancels the in-app prompt or explicitly hands off to the macOS prompt, redundant manual-fallback notifications are suppressed.
+For replacement targets within `/Applications`, EasyDMG also checks App Management access with a no-op modification-date write. A likely denial opens a helper dialog so you can grant permission in System Settings and retry. Inconclusive failures proceed to the normal installation attempt and copy-error handling. Destinations outside `/Applications` are not sent through this permission prompt.
 
-### 26. Transient Mount Failures - Rating: 2/10 - RESOLVED
+## Security and Copying
 
-A known-good DMG can occasionally fail to mount due to transient macOS or `hdiutil` glitches rather than a corrupt image.
+### macOS cannot verify the app or flags it as unsafe
 
-**Current behavior**: Instead of falling back to manual installation immediately upon any mount error, EasyDMG retries generic failures up to three times with a short backoff. It logs each attempt in diagnostics. It bypasses this retry logic for password-protected/encrypted DMGs (which route to their prompt flow) and for timeout-related failures.
+EasyDMG copies the app into a temporary location inside the destination folder and assesses it before moving it into place or replacing an existing app.
+
+- **Verified:** Installation proceeds.
+- **Unverified:** EasyDMG offers approval, Finder, or cancellation. **Do not warn me about apps from unidentified developers** allows these installs without that warning.
+- **Blocked:** Automatic installation cannot proceed. EasyDMG offers Finder or cancellation and attempts to remove the temporary copy.
+
+The warning preference does not disable security assessment or allow blocked apps to install automatically. See [Security Policy](.github/SECURITY.md#how-easydmg-checks-apps) for the assessment and approval details.
+
+### Quarantine affects first launch or app updates
+
+For permitted installs, EasyDMG attempts to remove the quarantine marker from the temporary copy before putting it in place. This reduces quarantine-related first-launch, app-location, and updater problems. Removal is best-effort: a failure is logged but does not abort installation.
+
+The earlier version of this document attributed a Sparkle false-update issue to copied quarantine attributes. Other apps may have different assumptions; a reproducible report is needed to diagnose those. See [Quarantine and Installation](.github/SECURITY.md#quarantine-and-installation) for the security implications.
+
+### There is not enough space or copying fails
+
+EasyDMG estimates the app's size and checks free space on the actual destination filesystem with a 500 MiB buffer. This does not reserve space; if capacity information cannot be read, installation proceeds and relies on copy-error handling.
+
+The copy is staged under a temporary `.easydmg-*` name in the destination folder. An existing app is not replaced until copying and security assessment have completed. A copy failure triggers an attempt to remove the temporary app.
+
+Confirmed insufficient space, a disconnected source or destination, or an incompatible drive format gets a specific explanation. Other failures can lead to manual installation with the volume still mounted. If a replacement failure reveals an App Store or root-ownership restriction, EasyDMG instead shows the protected-app dialog and attempts to unmount the volume. The original DMG is kept on these failure paths.
+
+### Copying takes a long time
+
+Copying runs on a background thread, allowing the progress interface to continue showing activity messages. The progress bar represents installation stages, not bytes copied or a precise time estimate.
+
+### The app contains framework links or signed code
+
+EasyDMG copies app contents without rewriting executable code. It does not need to rebuild or re-sign the installed app for Hardened Runtime or notarization. EasyDMG itself is configured for Hardened Runtime and Developer ID notarization.
+
+**Historical check:** The earlier document records a local check on 2026-05-03 in which the copy operation preserved an app-style framework symlink, such as `Versions/Current -> Versions/A`. That check was not rerun during this review; it is not a guarantee for every destination filesystem.
+
+## Cleanup and Cancellation
+
+### You cancel installation
+
+Canceling keeps the original DMG regardless of the trash preference. If a temporary app copy exists, EasyDMG attempts to remove it. Canceling before replacement leaves the existing installed copy in place.
+
+During normal installation cancellation, EasyDMG attempts to unmount a volume it opened itself. A volume detected as already mounted before processing is left mounted. Canceling during password entry stops the unlock/install flow without reopening the DMG for another attempt.
+
+### EasyDMG hands installation back to you
+
+For an already-mounted image, manual handoff opens its contents in Finder and leaves the volume mounted so you can install from it. For an image that needs mounting or a native prompt, EasyDMG opens it with DiskImageMounter.
+
+The original DMG is kept. EasyDMG does not track completion of your manual installation or later trash the file on your behalf.
+
+### Installation succeeds
+
+After installing, EasyDMG reveals the app in Finder if that preference is enabled, attempts to unmount the image, then attempts to trash the DMG if **Move DMG to trash after successful installation** is enabled. Successful installation attempts to unmount even an image that was already mounted before EasyDMG started processing it.
+
+**Open app after installation** runs afterward if enabled. If launching fails, EasyDMG logs the failure; the app remains installed, and any DMG cleanup already performed is not reversed. This preference also applies to unverified apps whose installation was permitted. It is off by default.
+
+### Unmounting, trashing, or temporary-file cleanup fails
+
+EasyDMG tries a normal unmount first. If the volume is busy, it waits briefly and retries; if normal unmounting fails, it attempts a forced unmount. These operations have time limits.
+
+An unmount failure is logged and does not undo a successful installation. The current success path still attempts to trash the DMG when that preference is enabled, even if unmounting failed. A mounted volume may therefore remain available after installation.
+
+Trashing and temporary-copy cleanup are also best-effort. Failures are logged. A failed trash operation does not undo installation; a failed temporary-copy cleanup can leave a hidden `.easydmg-*` item in the destination folder.
+
+## Feedback and Troubleshooting
+
+### You use notification or silent mode
+
+Feedback settings change routine progress and completion messages, not the installation safeguards or decisions requiring your input. Notification mode falls back to the progress bar when macOS cannot show notification banners or alerts.
+
+Silent mode suppresses routine progress and successful-install notifications. **Still notify me if installation fails** controls failure notifications in that mode, subject to macOS notification permissions. Ordinary manual handoffs, such as a package installer or multiple apps, are not treated as installation failures. Mount, validation, permission, or copy failures can qualify for failure notifications even when a manual recovery is offered.
+
+### You need to understand an unexpected result
+
+The local activity log is at `~/Library/Logs/EasyDMG/easydmg.log`, with older entries in `easydmg.previous.log` in the same folder. It records installation outcomes, reasons for manual handling, and cleanup failures. It stays on your Mac unless you share it.
+
+For a reproducible problem, [open an issue](https://github.com/jeff-schumann/EasyDMG/issues) with:
+
+- EasyDMG and macOS versions.
+- The app/DMG name and download source, where available.
+- Your install destination, relevant settings, and whether the image or an existing app was already open.
+- What you expected, what happened, and the relevant log entries.
+
+Logs can include usernames and full paths; review them before sharing. For security issues, use the private reporting route in [Security Policy](.github/SECURITY.md#reporting-a-vulnerability).
+
+## Limits and Optional Improvements
+
+No confirmed outstanding defect is tracked in this reference. That does not mean every configuration has been tested.
+
+- **Network and unusual filesystems:** Compatibility depends on the destination. Investigate reproducible failures before introducing broader restrictions.
+- **App-specific assumptions:** An app can assume `/Applications` in an updater, relaunch script, or license check without shipping a detectable system-extension marker. The bundle checks cannot reliably identify every such assumption.
+- **Precise copy progress:** Byte-level progress would be an optional usability improvement, estimated at **5/10 complexity**. The current staged progress is not a byte counter.
+
+Keep concrete bugs and selected enhancements in GitHub issues. Update this guide when behavior changes, and revisit historical checks when a real-world failure warrants it. Useful manual regression scenarios include interrupted copies, unusual destinations, password/license combinations, and replacement of renamed or multiple installed copies.
