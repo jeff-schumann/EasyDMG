@@ -1192,6 +1192,48 @@ extension URL {
     var abbreviatedPath: String {
         (path as NSString).abbreviatingWithTildeInPath
     }
+
+    /// `~/Applications`, wrapped only where a path reads well: before a slash,
+    /// never after one. Use in any dialog text that can run to a second line.
+    var abbreviatedDisplayPath: String {
+        URL.keepingFolderNamesWhole(abbreviatedPath)
+    }
+
+    /// `/Users/me/Applications`, with the same wrapping behavior. For the places
+    /// that spell out the full path rather than the `~` shorthand.
+    var fullDisplayPath: String {
+        URL.keepingFolderNamesWhole(path)
+    }
+
+    /// Moves a path's wrapping points from after each slash to just before it.
+    ///
+    /// Text layout normally treats a slash as a place it may break, which leaves
+    /// a line ending in `/` and the folder name stranded on the next one. Two
+    /// invisible characters fix that: a zero-width space before the slash opens a
+    /// break there, and a word joiner after it closes the one the slash would
+    /// otherwise offer. A short path like `/Applications` then can't break at
+    /// all. A word joiner also keeps `~` attached to the first slash in paths like
+    /// `~/Applications`. Longer paths can still break before later slashes.
+    ///
+    /// Display only — these characters have no business in logs, telemetry, or
+    /// anything compared against a real path.
+    private static func keepingFolderNamesWhole(_ text: String) -> String {
+        let components = text.components(separatedBy: "/")
+        guard components.count > 1 else { return text }
+
+        // Keep the leading slash and home shorthand attached to the first folder.
+        return components.dropFirst().reduce(components[0]) { result, component in
+            let separator: String
+            if result.isEmpty {
+                separator = "/\u{2060}"
+            } else if result == "~" {
+                separator = "\u{2060}/\u{2060}"
+            } else {
+                separator = "\u{200B}/\u{2060}"
+            }
+            return result + separator + component
+        }
+    }
 }
 
 // MARK: - User Preferences

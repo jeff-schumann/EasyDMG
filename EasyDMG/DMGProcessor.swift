@@ -2667,10 +2667,10 @@ class DMGProcessor: ObservableObject {
                 let displayName = dmgName.strippingDMGSuffix
                 let alert = NSAlert()
                 alert.alertStyle = isRetry ? .warning : .informational
-                alert.messageText = "“\(displayName)” is password-protected"
+                alert.messageText = "Password Required"
                 alert.informativeText = isRetry
-                    ? "Incorrect password. Enter the password to unlock this disk image."
-                    : "Enter the password to unlock this disk image."
+                    ? "Incorrect password. Enter the password to unlock “\(displayName)”."
+                    : "Enter the password to unlock “\(displayName)”."
 
                 alert.icon = AlertIcon.image
 
@@ -3090,7 +3090,7 @@ class DMGProcessor: ObservableObject {
             informative = """
             \(cause)
 
-            EasyDMG is set to install to \(preferred.path), where \(displayName) would install but wouldn't work.
+            EasyDMG is set to install to \(preferred.fullDisplayPath), where \(displayName) would install but wouldn't work.
             """
         } else {
             informative = """
@@ -3103,7 +3103,7 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "\(displayName) needs to install in \(systemFolder.lastPathComponent)"
+            alert.messageText = "Must Be Installed in \(systemFolder.lastPathComponent)"
             alert.informativeText = informative
             alert.icon = AlertIcon.image
 
@@ -3141,11 +3141,11 @@ class DMGProcessor: ObservableObject {
             alert.alertStyle = .warning
             // Title names the folder, not the path — a wrapped path makes a poor
             // headline, and the exact location is spelled out in the body below.
-            alert.messageText = "Can't install to \(preferred.lastPathComponent)"
+            alert.messageText = "Can't Install to \(preferred.lastPathComponent)"
             alert.informativeText = """
-            Your account doesn't have permission to write to \(preferred.path). Installing there needs an administrator.
+            Your account doesn't have permission to write to \(preferred.fullDisplayPath). Installing there needs an administrator.
 
-            EasyDMG can install \(displayName) to \(fallback.path) instead, where apps are available only to you.
+            EasyDMG can install \(displayName) to \(fallback.fullDisplayPath) instead, where apps are available only to you.
             """
             alert.icon = AlertIcon.image
 
@@ -3199,7 +3199,7 @@ class DMGProcessor: ObservableObject {
         issue: InstallFolderIssue
     ) async -> Bool {
         let displayName = appName.strippingAppSuffix
-        let location = directory.abbreviatedPath
+        let location = directory.abbreviatedDisplayPath
         let explanation: String
 
         // Personal is the one folder EasyDMG creates on demand. Anywhere else, a
@@ -3224,7 +3224,7 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Can't use \(location)"
+            alert.messageText = "Can't Use This Install Location"
             alert.informativeText = """
             \(explanation)
 
@@ -4060,23 +4060,21 @@ class DMGProcessor: ObservableObject {
         // relative and once absolute, which reads as two different locations.
         let leadSentence = isNested
             ? "\(displayName) is already installed."
-            : "\(displayName) is already installed in \(installDirectory.abbreviatedPath)."
+            : "\(displayName) is already installed in \(installDirectory.abbreviatedDisplayPath)."
 
         // Versions lead: they are what the choice usually turns on. Where the
         // existing copy lives follows, since it only appears when it's unusual.
-        var rows: [String] = []
+        var rows: [(label: String, value: String)] = []
         if comparison != .unknown, let installed = installedVersion, let new = newVersion {
-            rows.append("Installed: \(dialogVersionText(from: installed))")
-            rows.append("New: \(dialogVersionText(from: new))")
+            rows.append((label: "Installed:", value: dialogVersionText(from: installed)))
+            rows.append((label: "New:", value: dialogVersionText(from: new)))
         }
         if isNested {
-            rows.append("Location: \(existingFolder.abbreviatedPath)")
+            rows.append((label: "Location:", value: existingFolder.abbreviatedDisplayPath))
         }
         if isRenamed {
-            rows.append("Existing copy: \(existingName.strippingAppSuffix)")
+            rows.append((label: "Existing copy:", value: existingName.strippingAppSuffix))
         }
-
-        let rowsText = rows.joined(separator: "\n")
 
         // Held apart from the rows: this is a sentence, not a labeled value, so it
         // stays centered like the lead sentence rather than aligning to the rows'
@@ -4106,9 +4104,10 @@ class DMGProcessor: ObservableObject {
                 // sets the whole dialog's width — the same lever
                 // showInstallLocationFallbackDialog uses. Sized to the widest line
                 // the block can produce for a typical path (the Location row runs
-                // ~252pt) with a little slack. Going wider buys nothing: the buttons
-                // stack vertically at any width, so only the text benefits.
-                let accessoryWidth: CGFloat = 280
+                // ~201pt once its label column is subtracted) with a little slack.
+                // Going wider buys nothing: the buttons stack vertically at any
+                // width, so only the text benefits.
+                let accessoryWidth: CGFloat = 290
 
                 func label(_ text: String, _ alignment: NSTextAlignment) -> NSTextField {
                     let field = NSTextField(wrappingLabelWithString: text)
@@ -4120,9 +4119,46 @@ class DMGProcessor: ObservableObject {
                     return field
                 }
 
+                // The rows are laid out as two columns: labels at the left edge,
+                // values starting at a shared tab stop so they line up whatever the
+                // label lengths are. The stop is measured from the labels actually
+                // being shown, so the common two-row case doesn't carry a gutter
+                // sized for a label that isn't there. `headIndent` matches the stop,
+                // so a value too long to fit wraps under itself rather than back to
+                // the left margin.
+                let rowsLabel: NSTextField?
+                if rows.isEmpty {
+                    rowsLabel = nil
+                } else {
+                    let rowFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+                    let gutter: CGFloat = 8
+                    let valueColumn = (rows
+                        .map { ($0.label as NSString).size(withAttributes: [.font: rowFont]).width }
+                        .max() ?? 0) + gutter
+
+                    let style = NSMutableParagraphStyle()
+                    style.tabStops = [NSTextTab(textAlignment: .left, location: valueColumn)]
+                    style.defaultTabInterval = valueColumn
+                    style.headIndent = valueColumn
+                    style.lineBreakMode = .byWordWrapping
+
+                    let field = NSTextField(wrappingLabelWithString: "")
+                    field.attributedStringValue = NSAttributedString(
+                        string: rows.map { "\($0.label)\t\($0.value)" }.joined(separator: "\n"),
+                        attributes: [
+                            .font: rowFont,
+                            .foregroundColor: NSColor.labelColor,
+                            .paragraphStyle: style
+                        ]
+                    )
+                    field.isSelectable = false
+                    field.preferredMaxLayoutWidth = accessoryWidth
+                    field.setFrameSize(NSSize(width: accessoryWidth, height: field.fittingSize.height))
+                    rowsLabel = field
+                }
+
                 // The accessory is itself centered in the alert, so a centered label
                 // inside it is centered in the dialog.
-                let rowsLabel = rowsText.isEmpty ? nil : label(rowsText, .left)
                 let verdictLabel = verdictText.map { label($0, .center) }
 
                 let suppressCheckbox: NSButton?
@@ -4391,8 +4427,8 @@ class DMGProcessor: ObservableObject {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .informational
-                alert.messageText = "EasyDMG"
-                alert.informativeText = "\(displayName) is currently running.\n\nQuit and install the new version?"
+                alert.messageText = "App Still Running"
+                alert.informativeText = "\(displayName) must quit before EasyDMG can install the new version."
 
                 alert.icon = AlertIcon.image
 
@@ -4412,8 +4448,8 @@ class DMGProcessor: ObservableObject {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.alertStyle = .warning
-                alert.messageText = "EasyDMG"
-                alert.informativeText = "\(displayName) didn't quit. It may have unsaved work or an open dialog.\n\nClose it manually, then try again."
+                alert.messageText = "App Didn't Quit"
+                alert.informativeText = "\(displayName) may have unsaved work or an open window.\n\nClose it manually, then try again."
 
                 alert.icon = AlertIcon.image
 
@@ -4675,7 +4711,7 @@ class DMGProcessor: ObservableObject {
         let response = await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Can't replace \(appName.strippingAppSuffix)"
+            alert.messageText = "Can't Replace \(appName.strippingAppSuffix)"
             alert.informativeText = """
             \(appName.strippingAppSuffix) is managed by the App Store, and macOS doesn't let EasyDMG replace App Store apps.
 
@@ -5367,9 +5403,9 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "macOS can't verify “\(displayName)”"
+            alert.messageText = "Unverified App"
             alert.informativeText = [
-                "macOS can't confirm this app is free of malware. Only continue if you trust the source.",
+                "macOS can't confirm “\(displayName)” is free of malware. Only continue if you trust the source.",
                 "",
                 "You can turn off this warning in Settings."
             ].joined(separator: "\n")
@@ -5398,8 +5434,8 @@ class DMGProcessor: ObservableObject {
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "“\(displayName)” may not be safe"
-            alert.informativeText = "macOS flagged this app as damaged or potentially unsafe. EasyDMG won't install it automatically."
+            alert.messageText = "App May Not Be Safe"
+            alert.informativeText = "macOS flagged “\(displayName)” as damaged or potentially unsafe. EasyDMG won't install it automatically."
 
             alert.icon = AlertIcon.image
 
